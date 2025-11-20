@@ -15,6 +15,7 @@ mkdir -p $OUTPUT_PATH
 
 conda activate lmeval
 
+# Math
 lm_eval --model hf \
     --model_args pretrained=$MODEL \
     --tasks gsm8k_cot \
@@ -22,6 +23,7 @@ lm_eval --model hf \
     --batch_size 16 \
     --output_path $OUTPUT_PATH
 
+# Multilingual
 lm_eval --model hf \
     --model_args pretrained=$MODEL \
     --tasks m_mmlu_fr,arc_fr,hellaswag_fr,m_mmlu_es,arc_es,hellaswag_es,m_mmlu_de,arc_de,hellaswag_de,m_mmlu_ru,arc_ru,hellaswag_ru \
@@ -29,6 +31,7 @@ lm_eval --model hf \
     --batch_size 8 \
     --output_path $OUTPUT_PATH
 
+# Instruction
 lm_eval --model hf \
     --model_args pretrained=$MODEL \
     --tasks ifeval \
@@ -37,10 +40,23 @@ lm_eval --model hf \
     --output_path $OUTPUT_PATH
 
 
+# Generalization Retention
+lm_eval --model hf \
+  --model_args pretrained=meta-llama/Llama-3.2-3B-Instruct \
+  --tasks mmlu_high_school_math,mmlu_physics,mmlu_computer_science,\
+  mmlu_economics,mmlu_psychology,mmlu_political_science,\
+  mmlu_history,mmlu_philosophy,mmlu_law,mmlu_linguistics \
+  --device cuda:$GPU_ID \
+  --batch_size 8 \
+  --output_path $OUTPUT_PATH\
+  --num_fewshot 5 \
+  --limit 100
+
 conda deactivate
 conda activate bigcode
 cd bigcode-evaluation-harness
 
+#Coding
 accelerate launch  main.py \
   --model $MODEL \
   --max_length_generation 512 \
@@ -59,7 +75,7 @@ conda activate safety-eval
 cd safety-eval-fork
 
 export OPENAI_API_KEY=''
-
+# Safety
 python evaluation/eval.py generators \
   --model_name_or_path $MODEL \
   --use_vllm \
