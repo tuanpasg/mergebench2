@@ -3,7 +3,8 @@ import importlib
 
 def get_ft_ckpts(base_model):
     model_name = base_model.split('/')[-1]
-    task_names = ['instruction', 'math', 'coding', 'safety', 'multilingual']
+    # task_names = ['instruction', 'math', 'coding', 'safety', 'multilingual']
+    task_names = ['instruction', 'math', 'coding']
     return [f'MergeBench/{model_name}_{task_name}' for task_name in task_names]
 
 def parse_args():
