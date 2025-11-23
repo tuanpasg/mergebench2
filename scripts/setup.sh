@@ -4,7 +4,8 @@ set -e  # exit on first error
 # Install conda
 wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
 bash Miniconda3-latest-Linux-x86_64.sh
-source ~/.bashrc
+
+source "$HOME/miniconda3/etc/profile.d/conda.sh"
 conda --version
 
 # Make sure 'conda activate' works in non-interactive shell
