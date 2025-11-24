@@ -41,14 +41,12 @@ lm_eval --model hf \
 # Generalization Retention (MMLU subset)
 lm_eval --model hf \
   --model_args "pretrained=$MODEL" \
-  --tasks mmlu_high_school_math,mmlu_physics,mmlu_computer_science,\
-  mmlu_economics,mmlu_psychology,mmlu_political_science,\
-  mmlu_history,mmlu_philosophy,mmlu_law,mmlu_linguistics \
+  --tasks mmlu \
   --device "$DEVICE" \
   --batch_size 8 \
   --output_path "$OUTPUT_PATH" \
   --num_fewshot 5 \
-  --limit 100
+  # --limit 100
 
 conda deactivate
 
