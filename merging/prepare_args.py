@@ -39,7 +39,9 @@ def create_parser():
     _parser.add_argument("--model_coeff_value", type=float, default=0.3)
     _parser.add_argument("--keep_checkpoints", action="store_true", help='whether delete intermediate files')
     
-    
+    # LineS
+        # Task arithmetic
+    _parser.add_argument('--beta-coef', default=1, type=float)
     return _parser
 
 def prepare_args(params):
@@ -75,6 +77,8 @@ def prepare_args(params):
         kwargs['save_group'] = params.save_group
         kwargs['model_coeff_value'] = params.model_coeff_value
         kwargs['keep_checkpoints'] = params.keep_checkpoints
+    elif params.algo == 'LineS':
+        kwargs['scaling_coef'] = params.scaling_coef
     else:
         raise ValueError('No support merging method {}'.format(params.algo)) 
 

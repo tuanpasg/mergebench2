@@ -48,8 +48,9 @@ class LiNeSMerger(Merger):
         self.args = args  # optional, only for num_blocks/alpha heuristic
 
     def merge(self, **kwargs):
+        print("Start LineS merging ...")
         # LiNeS beta (depth-dependent increment)
-        beta = kwargs["scaling_coef"]
+        beta = kwargs["beta_coef"]
 
         # 1) Build multi-task task vector using baseline merging methods: Here is only Task Arithmetic
         task_vectors = [get_task_vector(ft_model, self.base_model) for ft_model in self.ft_ckpts]
@@ -70,6 +71,7 @@ class LiNeSMerger(Merger):
         alpha = 1/num_tasks
 
         # 4) Apply LiNeS depth-wise scaling to the multi-task vector
+        print(f"Scaling aggregated task vector with LineS: alpha={alpha}, beta={beta}, num_blocks={num_blocks}")
         scaled_tv = LiNeS_scaling(
             multi_task_tv,
             alpha=alpha,

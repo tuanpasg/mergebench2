@@ -24,6 +24,7 @@ eval "$(conda shell.bash hook)"
 conda create -n bigcode python=3.10.9
 conda activate bigcode
 
+cd /workspace
 git clone https://github.com/bigcode-project/bigcode-evaluation-harness.git
 cd bigcode-evaluation-harness
 
