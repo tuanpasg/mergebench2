@@ -7,7 +7,7 @@ source "$HOME/miniconda3/etc/profile.d/conda.sh"
 conda create -n merging
 conda activate merging
 git clone https://github.com/tuanpasg/mergebench2
-cd MergeBench
+cd 
 pip install -r requirements.txt
 
 conda deactivate

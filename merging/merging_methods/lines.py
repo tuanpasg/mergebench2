@@ -32,7 +32,7 @@ def LiNeS_scaling(task_vector, alpha, beta, num_blocks):
 
     return scaled_task_vector
 
-class LiNeSMerger(Merger):
+class LiNeS(Merger):
     """
     LiNeS merging method (architecture-agnostic, supports Llama-3.2-3B).
 
