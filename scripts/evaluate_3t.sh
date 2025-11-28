@@ -43,7 +43,7 @@ lm_eval --model hf \
   --model_args "pretrained=$MODEL" \
   --tasks mmlu \
   --device "$DEVICE" \
-  --batch_size 8 \
+  --batch_size 4 \
   --output_path "$OUTPUT_PATH" \
   --num_fewshot 5 \
   # --limit 100
