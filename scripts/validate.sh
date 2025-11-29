@@ -1,4 +1,5 @@
 #!/bin/bash
+# Quickly grasping the performance of model in a subset of standard test dataset
 set -euo pipefail  # safer
 
 MODEL="$1"
@@ -28,7 +29,8 @@ lm_eval --model hf \
   --tasks gsm8k_cot \
   --device "$DEVICE" \
   --batch_size 16 \
-  --output_path "$OUTPUT_PATH"
+  --output_path "$OUTPUT_PATH"\
+  --limit 0.1
 
 # Instruction (IFEval)
 lm_eval --model hf \
@@ -36,17 +38,18 @@ lm_eval --model hf \
   --tasks ifeval \
   --device "$DEVICE" \
   --batch_size 8 \
-  --output_path "$OUTPUT_PATH"
+  --output_path "$OUTPUT_PATH"\
+  --limit 0.1
 
-# Generalization Retention (MMLU subset)
-lm_eval --model hf \
-  --model_args "pretrained=$MODEL" \
-  --tasks mmlu \
-  --device "$DEVICE" \
-  --batch_size 4 \
-  --output_path "$OUTPUT_PATH" \
-  --num_fewshot 5 \
-  # --limit 100
+# # Generalization Retention (MMLU subset)
+# lm_eval --model hf \
+#   --model_args "pretrained=$MODEL" \
+#   --tasks mmlu \
+#   --device "$DEVICE" \
+#   --batch_size 4 \
+#   --output_path "$OUTPUT_PATH" \
+#   --num_fewshot 5 \
+#   --limit 0.1
 
 conda deactivate
 
@@ -64,7 +67,7 @@ accelerate launch main.py \
   --batch_size 10 \
   --allow_code_execution \
   --metric_output_path "$OUTPUT_PATH/code_eval.json" \
-  --use_auth_token
-
+  --use_auth_token \
+  --limit 20
 cd ..
 conda deactivate
