@@ -54,6 +54,10 @@ conda deactivate
 conda activate bigcode
 cd /workspace/bigcode-evaluation-harness
 
+BIGCODE_OUTPUT_PATH="$OUTPUT_PATH/${MODEL//\//__}"
+echo "BigCode OUTPUT_PATH: $BIGCODE_OUTPUT_PATH"
+mkdir -p "$BIGCODE_OUTPUT_PATH"
+
 accelerate launch main.py \
   --model "$MODEL" \
   --max_length_generation 512 \
@@ -63,7 +67,7 @@ accelerate launch main.py \
   --n_samples 10 \
   --batch_size 10 \
   --allow_code_execution \
-  --metric_output_path "$OUTPUT_PATH/code_eval.json" \
+  --metric_output_path "$BIGCODE_OUTPUT_PATH/code_eval.json" \
   --use_auth_token
 
 cd ..

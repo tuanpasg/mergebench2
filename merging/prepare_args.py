@@ -77,7 +77,7 @@ def prepare_args(params):
         kwargs['save_group'] = params.save_group
         kwargs['model_coeff_value'] = params.model_coeff_value
         kwargs['keep_checkpoints'] = params.keep_checkpoints
-    elif params.algo == 'LineS':
+    elif params.algo == 'LiNeS':
         kwargs['beta_coef'] = params.beta_coef
     else:
         raise ValueError('No support merging method {}'.format(params.algo)) 

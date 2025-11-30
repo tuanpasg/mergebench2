@@ -45,9 +45,11 @@ class LocalizeAndStitchTmp(Merger):
                 ft_model = self.ft_ckpts[i]
 
                 # Compute task vector
+                print("Computing task vectors")
                 task_vector = get_task_vector(ft_model, self.base_model)
                 num_params = len(task_vector)
 
+                print("Generating sparity mask")
                 abs_tv = torch.abs(task_vector)
                 k = int(graft_args['sparsity'] * abs_tv.numel())  # 1% of the total number of elements
 
@@ -88,6 +90,7 @@ class LocalizeAndStitchTmp(Merger):
                 masks.append(mask)
         
         # Stitch
+        print("Appling sparity masks and generating merged model")
         final_model = AutoModelForCausalLM.from_pretrained(self.base_model_name)
         stitcher = Stitcher(trainable_params, final_model, self.base_model, self.ft_ckpts, masks)
         merged_model = stitcher.interpolate_models()

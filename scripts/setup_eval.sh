@@ -14,8 +14,9 @@ eval "$(conda shell.bash hook)"
 # Install MergeBench
 # conda create -n merging
 # conda activate merging
+# cd /workspace
 # git clone https://github.com/tuanpasg/mergebench2
-# cd MergeBench
+# cd mergebench2/merging
 # pip install -r requirements.txt
 
 # conda deactivate

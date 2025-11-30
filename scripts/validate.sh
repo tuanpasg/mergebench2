@@ -54,6 +54,10 @@ lm_eval --model hf \
 conda deactivate
 
 # BigCode eval
+BIGCODE_OUTPUT_PATH="$OUTPUT_PATH/${MODEL//\//__}"
+echo "BigCode OUTPUT_PATH: $BIGCODE_OUTPUT_PATH"
+mkdir -p "$BIGCODE_OUTPUT_PATH"
+
 conda activate bigcode
 cd /workspace/bigcode-evaluation-harness
 
@@ -66,7 +70,7 @@ accelerate launch main.py \
   --n_samples 10 \
   --batch_size 10 \
   --allow_code_execution \
-  --metric_output_path "$OUTPUT_PATH/code_eval.json" \
+  --metric_output_path "$BIGCODE_OUTPUT_PATH/code_eval.json" \
   --use_auth_token \
   --limit 20
 cd ..
