@@ -27,6 +27,8 @@ def create_parser():
     # Consensus
     _parser.add_argument('--k', default=2, type=int)
     _parser.add_argument('--lamda', default=0.5, type=float)
+    _parser.add_argument('--lamda', default=[0.5], type=float, nargs='+',
+                         help='Lambda(s) for consensus masks; one per task or a single value to broadcast')
 
     # RegMean
     _parser.add_argument('--task_names', type=str)

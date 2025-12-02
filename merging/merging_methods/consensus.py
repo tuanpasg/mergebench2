@@ -21,13 +21,22 @@ class Consensus(Merger):
     def merge(self, **kwargs):
         k = kwargs['k']
         scaling_coef = kwargs['scaling_coef']
+        lamdas = kwargs.get('lamda', [0.2])  # list from CLI
 
         task_vectors = [get_task_vector(ft_model, self.base_model) for ft_model in self.ft_ckpts]
         mtl_tv = sum(task_vectors)
 
         tall_masks = []
         # replace this with results from the tune_lamda function
-        lamdas = [0.2, 0.2, 0.2, 0.2, 0.2]
+        # lamdas = [0.2, 0.2, 0.2, 0.2, 0.2]
+
+        if len(lamdas) == 1:
+            lamdas = lamdas * len(task_vectors)
+        elif len(lamdas) != len(task_vectors):
+            raise ValueError(f'lamda list length {len(lamdas)} must be 1 or equal to number of tasks {len(task_vectors)}')
+
+        print(f'[k = {k}][scaling_coef = {scaling_coef}][lamda = {lamdas}]')
+        
         for i in range(len(task_vectors)):
             tv = task_vectors[i]
             tall_mask = (torch.abs(tv) > torch.abs(mtl_tv - tv) * lamdas[i])
