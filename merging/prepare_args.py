@@ -44,6 +44,16 @@ def create_parser():
     # LineS
         # Task arithmetic
     _parser.add_argument('--beta-coef', default=1, type=float)
+
+    # CABS
+    _parser.add_argument('--n', default=64, type=int, help='CABS n:m pruning keep count')
+    _parser.add_argument('--m', default=256, type=int, help='CABS n:m pruning block size')
+    _parser.add_argument('--pruned_subdir', default='pruned_models', type=str, help='CABS pruned model output subdir')
+    _parser.add_argument('--no-save-pruned-models', dest='save_pruned_models', action='store_false',
+                         help='Disable saving per-task pruned models')
+    _parser.add_argument('--no-warn-min-overlap-fallback', dest='warn_min_overlap_fallback', action='store_false',
+                         help='Disable CABS min-overlap fallback warnings')
+    _parser.set_defaults(save_pruned_models=True, warn_min_overlap_fallback=True)
     return _parser
 
 def prepare_args(params):
@@ -81,6 +91,13 @@ def prepare_args(params):
         kwargs['keep_checkpoints'] = params.keep_checkpoints
     elif params.algo == 'LiNeS':
         kwargs['beta_coef'] = params.beta_coef
+    elif params.algo == 'CABS':
+        kwargs['n'] = params.n
+        kwargs['m'] = params.m
+        kwargs['scaling_coef'] = params.scaling_coef
+        kwargs['save_pruned_models'] = params.save_pruned_models
+        kwargs['pruned_subdir'] = params.pruned_subdir
+        kwargs['warn_min_overlap_fallback'] = params.warn_min_overlap_fallback
     else:
         raise ValueError('No support merging method {}'.format(params.algo)) 
 

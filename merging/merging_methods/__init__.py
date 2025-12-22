@@ -6,3 +6,4 @@ from merging_methods.localize_and_stitch import LocalizeAndStitch
 from merging_methods.consensus import Consensus
 from merging_methods.regmean import RegMean
 from merging_methods.lines import LiNeS
+from merging_methods.CABS import CABS

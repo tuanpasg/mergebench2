@@ -20,3 +20,6 @@ python ./merging/main.py --algo LiNeS --beta-coef 0.5 --base-model meta-llama/Ll
 python ./merging/main.py --algo Consensus --base-model meta-llama/Llama-3.2-3B --scaling-coef 0.5
 
 python ./merging/main.py --algo Consensus --base-model meta-llama/Llama-3.2-3B --scaling-coef 0.5 --lamda 0.2 0.3 0.4
+
+# CABS
+python ./merging/main.py --algo CABS --scaling-coef 0.5 --base-model meta-llama/Llama-3.2-3B --no-save-pruned-models
