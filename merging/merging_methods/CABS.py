@@ -185,7 +185,7 @@ class CABS(Merger):
         else:
             scaling_coefs = [float(scaling)] * 3
 
-        save_pruned_models = bool(kwargs.get("save_pruned_models", True))
+        save_pruned_models = bool(kwargs.get("save_pruned_models", False))
         pruned_subdir = kwargs.get("pruned_subdir", "pruned_models")
 
         # 1) Extract task vectors (ft - base), MergeBench-style

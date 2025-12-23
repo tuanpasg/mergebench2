@@ -93,9 +93,9 @@ def prepare_args(params):
         kwargs['n'] = params.n
         kwargs['m'] = params.m
         kwargs['scaling_coef'] = params.scaling_coef
-        kwargs['save_pruned_models'] = params.save_pruned_models
-        kwargs['pruned_subdir'] = params.pruned_subdir
-        kwargs['warn_min_overlap_fallback'] = params.warn_min_overlap_fallback
+        # kwargs['save_pruned_models'] = params.save_pruned_models
+        # kwargs['pruned_subdir'] = params.pruned_subdir
+        # kwargs['warn_min_overlap_fallback'] = params.warn_min_overlap_fallback
     else:
         raise ValueError('No support merging method {}'.format(params.algo)) 
 
