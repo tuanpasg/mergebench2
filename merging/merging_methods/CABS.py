@@ -1,9 +1,7 @@
 import os
-import math
 import torch
-from typing import Dict, List, Tuple, Union
-
-from merging_methods.utils import get_task_vector, vector_to_state_dict
+from typing import Dict, List, Tuple
+from merging_methods.utils import get_task_vector_dict
 from merging_methods.merger import Merger
 
 
@@ -145,6 +143,12 @@ def _sequential_cabs_nm_prune(
 
     return pruned_tvs, any_warn, warn_msgs
 
+def _apply_delta_to_state(base_state: Dict[str, torch.Tensor], delta: TensorDict) -> Dict[str, torch.Tensor]:
+    state = {k: v.clone() for k, v in base_state.items()}
+    for name, dv in delta.items():
+        if name in state:
+            state[name] = state[name].to(dv.device) + dv
+    return state
 
 class CABS(Merger):
     """
@@ -188,8 +192,9 @@ class CABS(Merger):
 
         # 1) Extract task vectors (ft - base), MergeBench-style
         task_vectors: List[TensorDict] = [
-            get_task_vector(ft_model, self.base_model) for ft_model in self.ft_ckpts
+            get_task_vector_dict(ft_model, self.base_model) for ft_model in self.ft_ckpts
         ]
+        base_state = {k: v.clone() for k, v in self.base_model.state_dict().items()}
 
         # 2) Sequential CA + BS (n:m) pruning in fixed order
         pruned_tvs, any_warn, warn_msgs = _sequential_cabs_nm_prune(
@@ -206,14 +211,13 @@ class CABS(Merger):
         if save_pruned_models:
             root = os.path.join(self.save_path, pruned_subdir)
             os.makedirs(root, exist_ok=True)
-
             for i, pruned_tv in enumerate(pruned_tvs):
                 out_dir = os.path.join(root, f"task_{i+1}")
                 os.makedirs(out_dir, exist_ok=True)
 
-                pruned_model_i = vector_to_state_dict(pruned_tv, self.base_model)
-                pruned_model_i.save_pretrained(out_dir)
-                # Keep tokenizer consistent
+                state = _apply_delta_to_state(base_state, pruned_tv)
+                self.base_model.load_state_dict(state)
+                self.base_model.save_pretrained(out_dir)
                 self.tokenizer.save_pretrained(out_dir)
 
         # 4) Merge pruned vectors (optionally with per-task scaling)
@@ -226,9 +230,16 @@ class CABS(Merger):
                 + scaling_coefs[2] * pruned_tvs[2][k]
             )
 
-        merged_model = vector_to_state_dict(merged_tv, self.base_model)
-
-        # 5) Save merged model
+        # 5) Merge the merged-pruned task vector to the base model
         os.makedirs(self.save_path, exist_ok=True)
-        merged_model.save_pretrained(self.save_path)
+        
+        # state = _apply_delta_to_state(base_state, merged_tv)
+        # self.base_model.load_state_dict(state)
+        for name, dv in merged_tv.items():
+            if name in base_state:
+                base_state[name] = base_state[name].to(dv.device) + dv
+        self.base_model.load_state_dict(base_state)
+
+        # 6) Save merged model
+        self.base_model.save_pretrained(self.save_path)
         self.tokenizer.save_pretrained(self.save_path)

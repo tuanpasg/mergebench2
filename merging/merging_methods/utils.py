@@ -27,6 +27,22 @@ def get_task_vector(ft_model, base_model):
 
     return ft_vec - base_vec
 
+def get_task_vector_dict(ft_model, base_model, exclude_lm_head=True):
+    """Return dict[name] -> tensor delta, excluding embeddings (and optionally lm_head)."""
+    ft_model.to('cpu')
+    base_model.to('cpu')
+
+    ft_params = select_trainable_params(ft_model)
+    base_params = select_trainable_params(base_model)
+
+    deltas = {}
+    for k, ft_t in ft_params.items():
+        if exclude_lm_head and 'lm_head' in k:
+            continue
+        deltas[k] = ft_t.detach() - base_params[k].detach()
+
+    return deltas
+
 def vector_to_state_dict(vec, pretrained_model, return_dict=False):
     i = 0
     vec.to('cpu')
