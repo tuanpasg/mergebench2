@@ -74,12 +74,12 @@ def _nm_prune_with_availability(
     return pruned.reshape(orig_shape), mask.reshape(orig_shape), needs_warn
 
 
-def _sequential_cabs_nm_prune(
+def _sequential_cabs_nm_prune_inplace(
     task_vectors: List[TensorDict],
     n: int,
     m: int,
     warn_min_overlap_fallback: bool = True,
-) -> Tuple[List[TensorDict], bool, List[str]]:
+) -> Tuple[bool, List[str]]:
     """
     Sequential CA-style pruning with BS = n:m pruning.
     Fixed order: task_vectors[0], task_vectors[1], task_vectors[2] (or k vectors).
@@ -89,12 +89,10 @@ def _sequential_cabs_nm_prune(
       update avail_mask <- avail_mask * (1 - mask_i)
 
     Returns:
-      pruned_tvs: list of pruned task vectors (same structure)
       any_warn: True if any layer/block triggered fallback warning
       warn_msgs: list of warning messages (deduplicated-ish)
     """
     k = len(task_vectors)
-    pruned_tvs: List[TensorDict] = [dict() for _ in range(k)]
     any_warn = False
     warn_msgs: List[str] = []
 
@@ -115,7 +113,7 @@ def _sequential_cabs_nm_prune(
                 raise ValueError(f"Shape mismatch for param {name}: tv0={base_shape}, tv{i}={t.shape}")
 
             pruned_t, mask, needs_warn = _nm_prune_with_availability(t, avail, n=n, m=m)
-            pruned_tvs[i][name] = pruned_t
+            task_vectors[i][name] = pruned_t
 
             # Update availability for next vectors (CA masking)
             avail = avail & (mask == 0)
@@ -141,7 +139,7 @@ def _sequential_cabs_nm_prune(
                 break
         warn_msgs = compact
 
-    return pruned_tvs, any_warn, warn_msgs
+    return any_warn, warn_msgs
 
 def _apply_delta_to_state(base_state: Dict[str, torch.Tensor], delta: TensorDict) -> Dict[str, torch.Tensor]:
     state = {k: v.clone() for k, v in base_state.items()}
@@ -197,7 +195,7 @@ class CABS(Merger):
         base_state = {k: v.clone() for k, v in self.base_model.state_dict().items()}
 
         # 2) Sequential CA + BS (n:m) pruning in fixed order
-        pruned_tvs, any_warn, warn_msgs = _sequential_cabs_nm_prune(
+        any_warn, warn_msgs = _sequential_cabs_nm_prune_inplace(
             task_vectors,
             n=n,
             m=m,
@@ -211,7 +209,7 @@ class CABS(Merger):
         if save_pruned_models:
             root = os.path.join(self.save_path, pruned_subdir)
             os.makedirs(root, exist_ok=True)
-            for i, pruned_tv in enumerate(pruned_tvs):
+            for i, pruned_tv in enumerate(task_vectors):
                 out_dir = os.path.join(root, f"task_{i+1}")
                 os.makedirs(out_dir, exist_ok=True)
 
@@ -222,12 +220,12 @@ class CABS(Merger):
 
         # 4) Merge pruned vectors (optionally with per-task scaling)
         merged_tv: TensorDict = {}
-        keys = pruned_tvs[0].keys()
+        keys = task_vectors[0].keys()
         for k in keys:
             merged_tv[k] = (
-                scaling_coefs[0] * pruned_tvs[0][k]
-                + scaling_coefs[1] * pruned_tvs[1][k]
-                + scaling_coefs[2] * pruned_tvs[2][k]
+                scaling_coefs[0] * task_vectors[0][k]
+                + scaling_coefs[1] * task_vectors[1][k]
+                + scaling_coefs[2] * task_vectors[2][k]
             )
 
         # 5) Merge the merged-pruned task vector to the base model
@@ -235,10 +233,17 @@ class CABS(Merger):
         
         # state = _apply_delta_to_state(base_state, merged_tv)
         # self.base_model.load_state_dict(state)
+        # Option A:
         for name, dv in merged_tv.items():
             if name in base_state:
                 base_state[name] = base_state[name].to(dv.device) + dv
         self.base_model.load_state_dict(base_state)
+        # Option B:
+        # state = self.base_model.state_dict()
+        # for name, dv in merged_tv.items():
+        #     if name in state:
+        #         state[name] = state[name].to(dv.device) + dv
+        # self.base_model.load_state_dict(state)
 
         # 6) Save merged model
         self.base_model.save_pretrained(self.save_path)
