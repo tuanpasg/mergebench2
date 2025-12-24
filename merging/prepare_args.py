@@ -28,6 +28,8 @@ def create_parser():
     _parser.add_argument('--k', default=2, type=int)
     _parser.add_argument('--lamda', default=[0.5], type=float, nargs='+',
                          help='Lambda(s) for consensus masks; one per task or a single value to broadcast')
+    _parser.add_argument('--lamda_tuning', action='store_true',
+                         help='Only run tune_lamda_all and skip merge')
 
     # RegMean
     _parser.add_argument('--task_names', type=str)
@@ -77,6 +79,7 @@ def prepare_args(params):
         kwargs['scaling_coef'] = params.scaling_coef
         kwargs['k'] = params.k
         kwargs['lamda'] = params.lamda
+        kwargs['lamda_tuning'] = params.lamda_tuning
     elif params.algo == 'RegMean':
         kwargs['task_names'] = params.task_names
         kwargs['reduction'] = params.reduction

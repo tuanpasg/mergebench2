@@ -1,24 +1,63 @@
+import copy
 import torch
 from merging_methods.utils import *
 from merging_methods.merger import Merger
+from huggingface_hub import HfApi, upload_folder
 
 
 class Consensus(Merger):
     def __init__(self, base_model, ft_models, save_path):
-        super().__init__(base_model, ft_models, save_path)\
+        super().__init__(base_model, ft_models, save_path)
     
-    def tune_lamda(self, mtl_tv, tv, i):
-        for lamda in [0.2,0.6]:    
-            print(f'Tuning lamda: {lamda} for model {i}')
-            tall_mask = (torch.abs(tv) > torch.abs(mtl_tv - tv) * lamda)
+    # def tune_lamda(self, mtl_tv, tv, i):
+    #     for lamda in [0.2,0.6]:    
+    #         print(f'Tuning lamda: {lamda} for model {i}')
+    #         tall_mask = (torch.abs(tv) > torch.abs(mtl_tv - tv) * lamda)
         
-            masked_model = vector_to_state_dict(tv * tall_mask, self.base_model)
+    #         masked_model = vector_to_state_dict(tv * tall_mask, self.base_model)
             
-            save_dir = './tmp/' + self.base_model_name.split('/')[1] + '/' + f'Consensus_{i}_lamda_' + str(lamda)
-            masked_model.save_pretrained(save_dir)
-            self.tokenizer.save_pretrained(save_dir)
-    
+    #         save_dir = './tmp/' + self.base_model_name.split('/')[1] + '/' + f'Consensus_{i}_lamda_' + str(lamda)
+    #         masked_model.save_pretrained(save_dir)
+    #         self.tokenizer.save_pretrained(save_dir)
+
+    def tune_lamda_all(self):
+        task_vectors = [get_task_vector(ft_model, self.base_model) for ft_model in self.ft_ckpts]
+        mtl_tv = sum(task_vectors)
+        for i in range(len(task_vectors)):
+            tv = task_vectors[i]
+            for lamda in [0.2, 0.3, 0.4, 0.5, 0.6]:    
+                print(f'Tuning lamda: {lamda} for model {i}')
+                tall_mask = (torch.abs(tv) > torch.abs(mtl_tv - tv) * lamda)
+            
+                base_model_copy = copy.deepcopy(self.base_model)
+                masked_model = vector_to_state_dict(mtl_tv * tall_mask, base_model_copy)
+                
+                model_name = self.base_model_name.split('/')[1] + '/' + f'Consensus_{i}_lamda_' + str(lamda)
+                save_dir = '/root/tmp/' + model_name
+                masked_model.save_pretrained(save_dir)
+                self.tokenizer.save_pretrained(save_dir)
+
+                # Upload model to HF space
+                repo_id = 'tuanpasg/'+model_name
+                api = HfApi()
+
+                print(f"Creating repo {repo_id} (if not exists)...")
+                api.create_repo(repo_id=repo_id, exist_ok=True)
+
+                upload_folder(
+                    folder_path=save_dir,
+                    repo_id=repo_id,
+                    repo_type="model",
+                    commit_message="Upload model",
+                )
+
     def merge(self, **kwargs):
+        lamda_tuning = kwargs.get('lamda_tuning', False)
+        if lamda_tuning:
+            print("CONSENSUS SPARSITY TUNING...")
+            self.tune_lamda_all(self)
+            return
+
         k = kwargs['k']
         scaling_coef = kwargs['scaling_coef']
         lamdas = kwargs.get('lamda', [0.2])  # list from CLI
