@@ -60,7 +60,7 @@ class Consensus(Merger):
         lamda_tuning = kwargs.get('lamda_tuning', False)
         if lamda_tuning:
             print("CONSENSUS SPARSITY TUNING...")
-            self.tune_lamda_all(self)
+            self.tune_lamda_all()
             return
 
         k = kwargs['k']
