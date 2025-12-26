@@ -25,7 +25,8 @@ class LocalizeAndStitchTmp(Merger):
             format_keys = {"output_key": "response"}
         
         return dataset, format_keys
-        
+    
+    @torch.no_grad()
     def merge(self, **kwargs):
         graft_args = {}
         dataless = kwargs['dataless']
@@ -38,6 +39,7 @@ class LocalizeAndStitchTmp(Merger):
 
         # Localize
         masks = []
+        trainable_params = None
         if dataless:
             for i in range(len(self.ft_ckpts)):
                 current_task = self.task_names[i]
@@ -62,15 +64,16 @@ class LocalizeAndStitchTmp(Merger):
                 mask[pos_mask] = graft_args["sigmoid_bias"]
                 mask[~pos_mask] = -graft_args["sigmoid_bias"]
 
-                print('Initial topk sparsity in my mask: ', torch.nonzero(mask).numel() / num_params)
+                print('Initial topk sparsity in my mask: ', mask.count_nonzero().item() / mask.numel())
 
                 sigmoid = torch.nn.Sigmoid()
                 frac = torch.round(sigmoid(mask))
                 
-                proportion = len(torch.nonzero(frac.bool())) / num_params
-                print('Proportion in my mask: ', proportion)
+                print('Proportion in mask:', frac.count_nonzero().item() / frac.numel())
 
-                masks.append(mask)
+                masks.append(frac)
+                del task_vector, abs_tv, values, mask, frac
+                import gc; gc.collect()
         else:
             for i in range(len(self.ft_ckpts)):
                 current_task = self.task_names[i]

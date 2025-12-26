@@ -41,11 +41,10 @@ conda activate lmeval
 
 cd /workspace
 git clone --depth 1 https://github.com/EleutherAI/lm-evaluation-harness
+
 cd lm-evaluation-harness
 pip install -e .
-
-# pip3 install torch==2.1.2 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-
+pip install torch transformers accelerate
 pip install langdetect immutabledict hf_transfer
 
 conda deactivate
