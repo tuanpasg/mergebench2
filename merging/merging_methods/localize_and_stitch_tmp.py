@@ -3,6 +3,60 @@ from merging_methods.merger import Merger
 from merging_methods.localize_utils import *
 from transformers import AutoModelForCausalLM
 from datasets import load_dataset
+import torch
+from typing import List, Optional
+
+@torch.no_grad()
+def stitch_dataless_las(
+    task_vectors: List[torch.Tensor],
+    masks: List[torch.Tensor],
+    *,
+    eps: float = 0.0,
+    out_dtype: Optional[torch.dtype] = None,
+) -> torch.Tensor:
+    """
+    Paper-style Dataless Localize-and-Stitch stitching:
+      sum_masked_tv = Σ_i (mask_i * tv_i)
+      sum_masks     = Σ_i mask_i
+      stitched_tv   = sum_masked_tv / sum_masks   (elementwise, only where sum_masks>0)
+
+    - masks can be bool or 0/1 numeric tensors.
+    - returns 0 where sum_masks == 0 (i.e., no task selected that position).
+    """
+    assert len(task_vectors) == len(masks) and len(task_vectors) > 0
+
+    # choose a device/dtype from the first tv
+    dev = task_vectors[0].device
+    tv_dtype = task_vectors[0].dtype
+
+    # accumulation in float32 for stability (you can change if you want)
+    acc_dtype = torch.float32
+    out_dtype = out_dtype or tv_dtype
+
+    sum_masked = torch.zeros_like(task_vectors[0], device=dev, dtype=acc_dtype)
+    sum_masks = torch.zeros_like(task_vectors[0], device=dev, dtype=acc_dtype)
+
+    for tv, m in zip(task_vectors, masks):
+        assert tv.shape == task_vectors[0].shape, "All task vectors must have the same shape"
+        assert m.shape == tv.shape, "Each mask must match its task vector shape"
+
+        tv = tv.to(device=dev, dtype=acc_dtype)
+        m_f = m.to(device=dev)
+        if m_f.dtype != torch.bool:
+            # treat nonzero as True
+            m_f = m_f != 0
+        m_f = m_f.to(dtype=acc_dtype)
+
+        sum_masked += m_f * tv
+        sum_masks += m_f
+
+    stitched = torch.zeros_like(sum_masked, dtype=acc_dtype)
+    denom = sum_masks + eps
+
+    nonzero = sum_masks != 0
+    stitched[nonzero] = sum_masked[nonzero] / denom[nonzero]
+
+    return stitched.to(dtype=out_dtype)
 
 class LocalizeAndStitchTmp(Merger):
     def __init__(self, base_model, ft_models, save_path):
@@ -39,6 +93,7 @@ class LocalizeAndStitchTmp(Merger):
 
         # Localize
         masks = []
+        task_vectors = []
         trainable_params = None
         if dataless:
             for i in range(len(self.ft_ckpts)):
@@ -62,9 +117,8 @@ class LocalizeAndStitchTmp(Merger):
                 mask = torch.zeros_like(task_vector, requires_grad=False)
                 pos_mask = abs_tv >= threshold
                 mask[pos_mask] = graft_args["sigmoid_bias"]
+                print('Initial topk sparsity in my mask: ', torch.nonzero(mask).numel() / num_params)
                 mask[~pos_mask] = -graft_args["sigmoid_bias"]
-
-                print('Initial topk sparsity in my mask: ', mask.count_nonzero().item() / mask.numel())
 
                 sigmoid = torch.nn.Sigmoid()
                 frac = torch.round(sigmoid(mask))
@@ -72,7 +126,9 @@ class LocalizeAndStitchTmp(Merger):
                 print('Proportion in mask:', frac.count_nonzero().item() / frac.numel())
 
                 masks.append(frac)
-                del task_vector, abs_tv, values, mask, frac
+                task_vectors.append(task_vector)
+                
+                del abs_tv, values, mask, frac
                 import gc; gc.collect()
         else:
             for i in range(len(self.ft_ckpts)):
@@ -94,9 +150,12 @@ class LocalizeAndStitchTmp(Merger):
         
         # Stitch
         print("Appling sparity masks and generating merged model")
-        final_model = AutoModelForCausalLM.from_pretrained(self.base_model_name)
-        stitcher = Stitcher(trainable_params, final_model, self.base_model, self.ft_ckpts, masks)
-        merged_model = stitcher.interpolate_models()
+        # final_model = AutoModelForCausalLM.from_pretrained(self.base_model_name)
+        # stitcher = Stitcher(trainable_params, final_model, self.base_model, self.ft_ckpts, masks)
+        # merged_model = stitcher.interpolate_models()
+
+        merged_tv = stitch_dataless_las(task_vectors,masks)
+        merged_model = vector_to_state_dict(merged_tv, self.base_model)
 
         merged_model.save_pretrained(self.save_path)
         self.tokenizer.save_pretrained(self.save_path)

@@ -12,16 +12,13 @@ conda --version
 eval "$(conda shell.bash hook)"
 
 # Install MergeBench
-# conda create -n merging
-# conda activate merging
-# cd /workspace
-# git clone https://github.com/tuanpasg/mergebench2
-# cd mergebench2/merging
-# pip install -r requirements.txt
+conda create -n merging python=3.10.9
+conda activate merging
+cd /workspace/mergebench2/merging
+pip install -r requirements.txt
+conda deactivate
 
-# conda deactivate
 # Install BigCode
-
 conda create -n bigcode python=3.10.9
 conda activate bigcode
 
