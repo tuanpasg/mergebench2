@@ -12,14 +12,14 @@ conda --version
 eval "$(conda shell.bash hook)"
 
 # Install MergeBench
-conda create -n merging python=3.10.9
+conda create -y -n merging python=3.10.9
 conda activate merging
 cd /workspace/mergebench2/merging
 pip install -r requirements.txt
 conda deactivate
 
 # Install BigCode
-conda create -n bigcode python=3.10.9
+conda create -y -n bigcode python=3.10.9
 conda activate bigcode
 
 cd /workspace
@@ -33,7 +33,7 @@ pip install hf_transfer
 conda deactivate
 # Install LmEval
 
-conda create -n lmeval python=3.10.9
+conda create -y -n lmeval python=3.10.9
 conda activate lmeval
 
 cd /workspace

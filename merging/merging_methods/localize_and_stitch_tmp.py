@@ -93,9 +93,10 @@ class LocalizeAndStitchTmp(Merger):
 
         # Localize
         masks = []
-        task_vectors = []
         trainable_params = None
         if dataless:
+            sum_masked = None
+            sum_masks = None
             for i in range(len(self.ft_ckpts)):
                 current_task = self.task_names[i]
                 print(f'Localizing {current_task} model')
@@ -126,9 +127,17 @@ class LocalizeAndStitchTmp(Merger):
                 print('Proportion in mask:', frac.count_nonzero().item() / frac.numel())
 
                 masks.append(frac)
-                task_vectors.append(task_vector)
-                
-                del abs_tv, values, mask, frac
+
+                tv_f = task_vector.to(dtype=torch.float32)
+                m_f = frac.to(dtype=torch.float32)
+                if sum_masked is None:
+                    sum_masked = tv_f * m_f
+                    sum_masks = m_f.clone()
+                else:
+                    sum_masked.add_(tv_f * m_f)
+                    sum_masks.add_(m_f)
+
+                del abs_tv, values, mask, frac, tv_f, m_f, task_vector
                 import gc; gc.collect()
         else:
             for i in range(len(self.ft_ckpts)):
@@ -150,12 +159,16 @@ class LocalizeAndStitchTmp(Merger):
         
         # Stitch
         print("Appling sparity masks and generating merged model")
-        # final_model = AutoModelForCausalLM.from_pretrained(self.base_model_name)
-        # stitcher = Stitcher(trainable_params, final_model, self.base_model, self.ft_ckpts, masks)
-        # merged_model = stitcher.interpolate_models()
-
-        merged_tv = stitch_dataless_las(task_vectors,masks)
-        merged_model = vector_to_state_dict(merged_tv, self.base_model)
+        if dataless:
+            stitched = torch.zeros_like(sum_masked, dtype=torch.float32)
+            nonzero = sum_masks != 0
+            stitched[nonzero] = sum_masked[nonzero] / sum_masks[nonzero]
+            merged_tv = stitched.to(dtype=self.base_model.dtype)
+            merged_model = vector_to_state_dict(merged_tv, self.base_model)
+        else:
+            final_model = AutoModelForCausalLM.from_pretrained(self.base_model_name)
+            stitcher = Stitcher(trainable_params, final_model, self.base_model, self.ft_ckpts, masks)
+            merged_model = stitcher.interpolate_models()
 
         merged_model.save_pretrained(self.save_path)
         self.tokenizer.save_pretrained(self.save_path)
