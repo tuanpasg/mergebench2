@@ -7,3 +7,4 @@ from merging_methods.consensus import Consensus
 from merging_methods.regmean import RegMean
 from merging_methods.lines import LiNeS
 from merging_methods.CABS import CABS
+from merging_methods.ISO import IsoC, IsoCTS

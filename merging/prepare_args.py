@@ -54,6 +54,9 @@ def create_parser():
     _parser.add_argument('--no-warn-min-overlap-fallback', dest='warn_min_overlap_fallback', action='store_false',
                          help='Disable CABS min-overlap fallback warnings')
     _parser.set_defaults(save_pruned_models=True, warn_min_overlap_fallback=True)
+
+    # ISO
+    _parser.add_argument('--common-space-fraction', default=0.8, type=float, help='IsoCTS common subspace fraction')
     return _parser
 
 def prepare_args(params):
@@ -99,6 +102,8 @@ def prepare_args(params):
         # kwargs['save_pruned_models'] = params.save_pruned_models
         # kwargs['pruned_subdir'] = params.pruned_subdir
         # kwargs['warn_min_overlap_fallback'] = params.warn_min_overlap_fallback
+    elif params.algo == 'IsoCTS':
+        kwargs['common_space_fraction'] = params.common_space_fraction
     else:
         raise ValueError('No support merging method {}'.format(params.algo)) 
 

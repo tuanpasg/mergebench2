@@ -1,6 +1,8 @@
 # merging/merging_methods/ISO.py
 import torch
 from typing import Dict, List, Optional
+from merging_methods.merger import Merger
+from merging_methods.utils import get_task_vector_dict
 
 
 def _running_mean_update(dst: Optional[torch.Tensor], x: torch.Tensor, i: int) -> torch.Tensor:
@@ -179,32 +181,63 @@ def iso_cts_merge_task_vectors(
 # MergeBench wrapper classes
 # -------------------------
 
-class IsoC:
+def _apply_delta_to_state(base_state: Dict[str, torch.Tensor], delta: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    state = {k: v.clone() for k, v in base_state.items()}
+    for name, dv in delta.items():
+        if name in state:
+            state[name] = state[name].to("cpu") + dv.to("cpu")
+    return state
+
+
+class IsoC(Merger):
     """
-    MergeBench method name: iso_c
-    Expects task vectors already computed (theta_t - theta_0).
+    MergeBench method name (CLI): IsoC
     """
     method_name = "iso_c"
 
-    def merge(self, task_vectors: List[Dict[str, torch.Tensor]], config) -> Dict[str, torch.Tensor]:
-        device = torch.device(getattr(config, "device", "cuda" if torch.cuda.is_available() else "cpu"))
-        skip_if = getattr(config, "skip_if", None)
-        return iso_c_merge_task_vectors(task_vectors, device=device, skip_if=skip_if)
+    def __init__(self, base_model, ft_models, save_path):
+        super().__init__(base_model, ft_models, save_path)
+
+    def merge(self, **kwargs):
+        device = torch.device(kwargs.get("device", "cuda" if torch.cuda.is_available() else "cpu"))
+        skip_if = kwargs.get("skip_if", None)
+
+        task_vectors = [get_task_vector_dict(ft_model, self.base_model) for ft_model in self.ft_ckpts]
+        merged_tv = iso_c_merge_task_vectors(task_vectors, device=device, skip_if=skip_if)
+
+        base_state = {k: v.clone() for k, v in self.base_model.state_dict().items()}
+        state = _apply_delta_to_state(base_state, merged_tv)
+        self.base_model.load_state_dict(state)
+
+        self.base_model.save_pretrained(self.save_path)
+        self.tokenizer.save_pretrained(self.save_path)
 
 
-class IsoCTS:
+class IsoCTS(Merger):
     """
-    MergeBench method name: iso_cts
+    MergeBench method name (CLI): IsoCTS
     """
     method_name = "iso_cts"
 
-    def merge(self, task_vectors: List[Dict[str, torch.Tensor]], config) -> Dict[str, torch.Tensor]:
-        device = torch.device(getattr(config, "device", "cuda" if torch.cuda.is_available() else "cpu"))
-        frac = float(getattr(getattr(config, "method", config), "common_space_fraction", 0.8))
-        skip_if = getattr(config, "skip_if", None)
-        return iso_cts_merge_task_vectors(
+    def __init__(self, base_model, ft_models, save_path):
+        super().__init__(base_model, ft_models, save_path)
+
+    def merge(self, **kwargs):
+        device = torch.device(kwargs.get("device", "cuda" if torch.cuda.is_available() else "cpu"))
+        frac = float(kwargs.get("common_space_fraction", 0.8))
+        skip_if = kwargs.get("skip_if", None)
+
+        task_vectors = [get_task_vector_dict(ft_model, self.base_model) for ft_model in self.ft_ckpts]
+        merged_tv = iso_cts_merge_task_vectors(
             task_vectors,
             device=device,
             common_space_fraction=frac,
             skip_if=skip_if,
         )
+
+        base_state = {k: v.clone() for k, v in self.base_model.state_dict().items()}
+        state = _apply_delta_to_state(base_state, merged_tv)
+        self.base_model.load_state_dict(state)
+
+        self.base_model.save_pretrained(self.save_path)
+        self.tokenizer.save_pretrained(self.save_path)
