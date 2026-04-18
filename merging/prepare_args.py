@@ -57,6 +57,14 @@ def create_parser():
 
     # ISO
     _parser.add_argument('--common-space-fraction', default=0.8, type=float, help='IsoCTS common subspace fraction')
+    _parser.add_argument('--validate-gen-flag', action='store_true',
+                         help='IsoCTS: generate multiple merged models from one merged task vector')
+    _parser.add_argument('--validate-scaling-start', default=0.0, type=float,
+                         help='IsoCTS validate generation scaling start (inclusive)')
+    _parser.add_argument('--validate-scaling-stop', default=1.0, type=float,
+                         help='IsoCTS validate generation scaling stop (exclusive)')
+    _parser.add_argument('--validate-scaling-step', default=0.2, type=float,
+                         help='IsoCTS validate generation scaling step')
     return _parser
 
 def prepare_args(params):
@@ -103,7 +111,12 @@ def prepare_args(params):
         # kwargs['pruned_subdir'] = params.pruned_subdir
         # kwargs['warn_min_overlap_fallback'] = params.warn_min_overlap_fallback
     elif params.algo == 'IsoCTS':
+        kwargs['scaling_coef'] = params.scaling_coef
         kwargs['common_space_fraction'] = params.common_space_fraction
+        kwargs['validate_gen_flag'] = params.validate_gen_flag
+        kwargs['validate_scaling_start'] = params.validate_scaling_start
+        kwargs['validate_scaling_stop'] = params.validate_scaling_stop
+        kwargs['validate_scaling_step'] = params.validate_scaling_step
     else:
         raise ValueError('No support merging method {}'.format(params.algo)) 
 
