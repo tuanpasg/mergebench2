@@ -1,11 +1,39 @@
 #!/bin/bash
 set -e  # exit on first error
 
-# Install conda
-wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
-bash Miniconda3-latest-Linux-x86_64.sh
+# Conda note:
+# In non-interactive bash scripts, `conda` commands may fail until conda.sh is sourced.
 
-source "$HOME/miniconda3/etc/profile.d/conda.sh"
+if command -v conda >/dev/null 2>&1; then
+  echo "[setup_eval] Conda detected."
+else
+  echo "[setup_eval] Conda not found. Installing Miniconda3..."
+
+  MINICONDA_SCRIPT="Miniconda3-latest-Linux-x86_64.sh"
+  MINICONDA_URL="https://repo.anaconda.com/miniconda/${MINICONDA_SCRIPT}"
+
+  if command -v wget >/dev/null 2>&1; then
+    wget -O "$MINICONDA_SCRIPT" "$MINICONDA_URL"
+  elif command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$MINICONDA_URL" -o "$MINICONDA_SCRIPT"
+  else
+    echo "[setup_eval] Error: neither wget nor curl is available to download Miniconda."
+    exit 1
+  fi
+
+  bash "$MINICONDA_SCRIPT" -b -p "$HOME/miniconda3"
+  rm -f "$MINICONDA_SCRIPT"
+fi
+
+# If `conda` is not yet on PATH in this shell, use the default install path.
+if command -v conda >/dev/null 2>&1; then
+  CONDA_BASE="$(conda info --base)"
+else
+  CONDA_BASE="$HOME/miniconda3"
+fi
+
+echo "[setup_eval] Sourcing conda from: $CONDA_BASE"
+source "$CONDA_BASE/etc/profile.d/conda.sh"
 conda --version
 
 # Make sure 'conda activate' works in non-interactive shell

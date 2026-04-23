@@ -2,7 +2,7 @@
 hf auth login
 
 # Script to push merged model to HF, MUST modifying --repo_id and --folder_path 
-python ./scripts/hf_publish.py --repo_id tuanpasg/mb_llama_ta_0.1 --folder_path /workspace/mergebench2/merged_models/Llama-3.2-3B_merged/TaskArithmetic_scaling_coef_0.1
+python ./scripts/hf_publish.py --repo_id 0.1 --folder_path /workspace/mergebench2/merged_models/Llama-3.2-3B_merged/TaskArithmetic_scaling_coef_0.1
 
 # Model soup
 python ./merging/main.py --algo TaskArithmetic --scaling-coef 0.33 --base-model meta-llama/Llama-3.2-3B
@@ -23,3 +23,7 @@ python ./merging/main.py --algo Consensus --base-model meta-llama/Llama-3.2-3B -
 
 # CABS
 python ./merging/main.py --algo CABS --scaling-coef 0.5 --base-model meta-llama/Llama-3.2-3B --no-save-pruned-models
+
+# ISO
+# python merging/main.py --algo IsoC
+python merging/main.py --algo IsoCTS --common-space-fraction 0.8 --validate-gen-flag --validate-scaling-start 2.6 --validate-scaling-stop 3.2
