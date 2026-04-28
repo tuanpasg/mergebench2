@@ -15,7 +15,18 @@ OUTPUT_PATH="$(readlink -f "$OUTPUT_PATH")"
 mkdir -p "$OUTPUT_PATH"
 
 # Initialize conda for this shell
-source "$(conda info --base)/etc/profile.d/conda.sh"
+CONDA_BIN=""
+if command -v conda >/dev/null 2>&1; then
+  CONDA_BIN="$(command -v conda)"
+elif [ -x "/opt/miniforge3/bin/conda" ]; then
+  CONDA_BIN="/opt/miniforge3/bin/conda"
+elif [ -x "$HOME/miniconda3/bin/conda" ]; then
+  CONDA_BIN="$HOME/miniconda3/bin/conda"
+fi
+CONDA_BASE="$("$CONDA_BIN" info --base)"
+echo "[setup_eval] Sourcing conda from: $CONDA_BASE"
+source "$CONDA_BASE/etc/profile.d/conda.sh"
+conda --version
 
 # Use only the requested GPU and refer to it as cuda:0
 export CUDA_VISIBLE_DEVICES="$GPU_ID"

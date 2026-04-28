@@ -1,14 +1,9 @@
 # merging/merging_methods/ISO.py
 import torch
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Dict, List, Optional
 from merging_methods.merger import Merger
-from merging_methods.utils import get_task_vector_dict
-
-
-def skip_if(name: str) -> bool:
-    # Exclude fragile/high-cost heads commonly skipped by MergeBench pipelines.
-    return ("embed_tokens" in name) or ("lm_head" in name)
+from merging_methods.utils import get_task_vector_dict_iso
 
 
 def _running_mean_update(dst: Optional[torch.Tensor], x: torch.Tensor, i: int) -> torch.Tensor:
@@ -61,7 +56,6 @@ def _svd_safe(x: torch.Tensor):
 def iso_c_merge_task_vectors(
     task_vectors: List[Dict[str, torch.Tensor]],
     device: torch.device,
-    skip_if: Optional[Callable[[str], bool]] = None,
 ) -> Dict[str, torch.Tensor]:
     """
     Iso-C on task vectors:
@@ -80,14 +74,6 @@ def iso_c_merge_task_vectors(
 
     with torch.no_grad():
         for k in keys:
-            if skip_if is not None and skip_if(k):
-                # still merge by simple avg to keep output consistent
-                avg = None
-                for i, tv in enumerate(task_vectors):
-                    avg = _running_mean_update(avg, tv[k].to(device), i)
-                out[k] = avg
-                continue
-
             # avg across tasks first
             avg = None
             for i, tv in enumerate(task_vectors):
@@ -118,7 +104,6 @@ def iso_cts_merge_task_vectors(
     task_vectors: List[Dict[str, torch.Tensor]],
     device: torch.device,
     common_space_fraction: float = 0.8,
-    skip_if: Optional[Callable[[str], bool]] = None,
 ) -> Dict[str, torch.Tensor]:
     """
     Iso-CTS on task vectors:
@@ -140,14 +125,6 @@ def iso_cts_merge_task_vectors(
     with torch.no_grad():
         for k in keys:
             print(k)
-            if skip_if is not None and skip_if(k):
-                print("is skipped")
-                avg = None
-                for i, tv in enumerate(task_vectors):
-                    avg = _running_mean_update(avg, tv[k].to(device), i)
-                out[k] = avg
-                continue
-
             shape0 = task_vectors[0][k].shape
             is_2d = (len(shape0) == 2) and ("text_projection" not in k)
 
@@ -282,10 +259,13 @@ class IsoC(Merger):
 
     def merge(self, **kwargs):
         device = torch.device(kwargs.get("device", "cuda" if torch.cuda.is_available() else "cpu"))
-        skip_if_fn = kwargs.get("skip_if", skip_if)
+        exclude_embed = bool(kwargs.get("exclude_embed", True))
 
-        task_vectors = [get_task_vector_dict(ft_model, self.base_model) for ft_model in self.ft_ckpts]
-        merged_tv = iso_c_merge_task_vectors(task_vectors, device=device, skip_if=skip_if_fn)
+        task_vectors = [
+            get_task_vector_dict_iso(ft_model, self.base_model, exclude_embed=exclude_embed)
+            for ft_model in self.ft_ckpts
+        ]
+        merged_tv = iso_c_merge_task_vectors(task_vectors, device=device)
 
         base_state = {k: v.clone() for k, v in self.base_model.state_dict().items()}
         state = _apply_delta_to_state(base_state, merged_tv)
@@ -308,18 +288,20 @@ class IsoCTS(Merger):
         device = torch.device(kwargs.get("device", "cuda" if torch.cuda.is_available() else "cpu"))
         scaling_coef = float(kwargs.get("scaling_coef", 1.0))
         frac = float(kwargs.get("common_space_fraction", 0.8))
+        exclude_embed = bool(kwargs.get("exclude_embed", True))
         validate_gen_flag = bool(kwargs.get("validate_gen_flag", False))
         validate_scaling_start = float(kwargs.get("validate_scaling_start", 0.0))
         validate_scaling_stop = float(kwargs.get("validate_scaling_stop", 1.0))
         validate_scaling_step = float(kwargs.get("validate_scaling_step", 0.2))
-        skip_if_fn = kwargs.get("skip_if", skip_if)
 
-        task_vectors = [get_task_vector_dict(ft_model, self.base_model) for ft_model in self.ft_ckpts]
+        task_vectors = [
+            get_task_vector_dict_iso(ft_model, self.base_model, exclude_embed=exclude_embed)
+            for ft_model in self.ft_ckpts
+        ]
         merged_tv = iso_cts_merge_task_vectors(
             task_vectors,
             device=device,
             common_space_fraction=frac,
-            skip_if=skip_if_fn,
         )
 
         base_state = {k: v.clone() for k, v in self.base_model.state_dict().items()}

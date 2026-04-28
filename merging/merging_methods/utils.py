@@ -43,6 +43,20 @@ def get_task_vector_dict(ft_model, base_model, exclude_lm_head=True):
 
     return deltas
 
+def get_task_vector_dict_iso(ft_model, base_model, exclude_embed=True):
+    """Return dict[name] -> tensor delta, excluding embeddings (and optionally lm_head)."""
+    ft_model.to('cpu')
+    base_model.to('cpu')
+
+    ft_params = select_trainable_params_optimized(ft_model, exclude_embed)
+    base_params = select_trainable_params_optimized(base_model, exclude_embed)
+
+    deltas = {}
+    for k, ft_t in ft_params.items():
+        deltas[k] = ft_t.detach() - base_params[k].detach()
+
+    return deltas
+
 def vector_to_state_dict(vec, pretrained_model, return_dict=False):
     i = 0
     vec.to('cpu')
@@ -60,21 +74,27 @@ def vector_to_state_dict(vec, pretrained_model, return_dict=False):
     else:
         return pretrained_model
 
-def select_trainable_params_optimized(model):
+def select_trainable_params_optimized(model, exclude_embed=True):
     params = {}
     for n, p in model.named_parameters():
-        lname = n.lower()
-        if ("embed" not in lname) and ("lm_head" not in lname):
+        if exclude_embed:
+            lname = n.lower()
+            if ("embed" not in lname) and ("lm_head" not in lname):
+                params[n] = p
+            else:
+                print(f"Skip {lname} layer from extracting task vector")
+                continue
+        else:
             params[n] = p
     return params
 
 @torch.no_grad()
-def get_task_vector_optimized(ft_model, base_model):
+def get_task_vector_optimized(ft_model, base_model, exclude_embed=True):
     ft_model = ft_model.to("cpu")
     base_model = base_model.to("cpu")
 
-    ft_params = select_trainable_params_optimized(ft_model)
-    base_params = select_trainable_params_optimized(base_model)
+    ft_params = select_trainable_params_optimized(ft_model, exclude_embed)
+    base_params = select_trainable_params_optimized(base_model, exclude_embed)
 
     # Safety: ensure same ordering / same keys
     if list(ft_params.keys()) != list(base_params.keys()):
@@ -85,15 +105,17 @@ def get_task_vector_optimized(ft_model, base_model):
     return ft_vec - base_vec
 
 @torch.no_grad()
-def vector_to_state_dict_optimized(vec, pretrained_model, return_dict=False):
+def vector_to_state_dict_optimized(vec, pretrained_model, return_dict=False, exclude_embed=True):
     vec = vec.detach().to("cpu")
     pretrained_model = pretrained_model.to("cpu")
 
     i = 0
     for name, p in pretrained_model.named_parameters():
-        lname = name.lower()
-        if ("embed" in lname) or ("lm_head" in lname):
-            continue
+        if exclude_embed:
+            lname = name.lower()
+            if ("embed" in lname) or ("lm_head" in lname):
+                print(f"Skip adding {lname} layer to base model")
+                continue
 
         n = p.numel()
         delta = vec[i:i+n].view_as(p)

@@ -4,8 +4,17 @@ set -e  # exit on first error
 # Conda note:
 # In non-interactive bash scripts, `conda` commands may fail until conda.sh is sourced.
 
+CONDA_BIN=""
 if command -v conda >/dev/null 2>&1; then
-  echo "[setup_eval] Conda detected."
+  CONDA_BIN="$(command -v conda)"
+elif [ -x "/opt/miniforge3/bin/conda" ]; then
+  CONDA_BIN="/opt/miniforge3/bin/conda"
+elif [ -x "$HOME/miniconda3/bin/conda" ]; then
+  CONDA_BIN="$HOME/miniconda3/bin/conda"
+fi
+
+if [ -n "$CONDA_BIN" ]; then
+  echo "[setup_eval] Conda detected at: $CONDA_BIN"
 else
   echo "[setup_eval] Conda not found. Installing Miniconda3..."
 
@@ -23,15 +32,10 @@ else
 
   bash "$MINICONDA_SCRIPT" -b -p "$HOME/miniconda3"
   rm -f "$MINICONDA_SCRIPT"
+  CONDA_BIN="$HOME/miniconda3/bin/conda"
 fi
 
-# If `conda` is not yet on PATH in this shell, use the default install path.
-if command -v conda >/dev/null 2>&1; then
-  CONDA_BASE="$(conda info --base)"
-else
-  CONDA_BASE="$HOME/miniconda3"
-fi
-
+CONDA_BASE="$("$CONDA_BIN" info --base)"
 echo "[setup_eval] Sourcing conda from: $CONDA_BASE"
 source "$CONDA_BASE/etc/profile.d/conda.sh"
 conda --version
