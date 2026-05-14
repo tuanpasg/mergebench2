@@ -58,9 +58,9 @@ cd /workspace
 git clone https://github.com/bigcode-project/bigcode-evaluation-harness.git
 cd bigcode-evaluation-harness
 
+pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
+  --index-url https://download.pytorch.org/whl/cu121
 pip install -e .
-# pip3 install torch==2.1.2 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-# pip install numpy==1.24.1
 pip install hf_transfer
 conda deactivate
 # Install LmEval
@@ -72,8 +72,10 @@ cd /workspace
 git clone --depth 1 https://github.com/EleutherAI/lm-evaluation-harness
 
 cd lm-evaluation-harness
+pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
+  --index-url https://download.pytorch.org/whl/cu121
 pip install -e .
-pip install torch transformers accelerate
+pip install transformers accelerate
 pip install langdetect immutabledict hf_transfer
 
 conda deactivate
