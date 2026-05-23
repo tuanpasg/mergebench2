@@ -50,6 +50,17 @@ cd /workspace/mergebench2/merging
 pip install -r requirements.txt
 conda deactivate
 
+# Install Wudi-Merge
+conda create -y -n wudi python=3.10.9
+conda activate wudi 
+
+cd /workspace/
+git clone https://github.com/tuanpasg/wudi-merging-llama.git
+
+cd /workspace/wudi-merging-llama/llama
+pip install -r requirements.txt
+conda deactivate
+
 # Install BigCode
 conda create -y -n bigcode python=3.10.9
 conda activate bigcode

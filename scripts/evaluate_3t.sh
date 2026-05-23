@@ -5,6 +5,17 @@ MODEL="$1"
 GPU_ID="$2"
 OUTPUT_PATH="$3"
 
+EVAL_START_TIME="$(date +%s)"
+report_total_time() {
+  local exit_code=$?
+  local eval_end_time elapsed
+  eval_end_time="$(date +%s)"
+  elapsed=$((eval_end_time - EVAL_START_TIME))
+  echo "Total evaluating time: ${elapsed} seconds"
+  exit "$exit_code"
+}
+trap report_total_time EXIT
+
 echo "MODEL:        $MODEL"
 echo "GPU_ID:       $GPU_ID"
 echo "OUTPUT_PATH:  $OUTPUT_PATH"
