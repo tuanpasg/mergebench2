@@ -43,6 +43,14 @@ conda --version
 # Make sure 'conda activate' works in non-interactive shell
 eval "$(conda shell.bash hook)"
 
+# Recent conda releases require Terms of Service acceptance for the default
+# Anaconda channels before non-interactive environment creation can proceed.
+if conda tos accept --help >/dev/null 2>&1; then
+  echo "[setup_eval] Accepting Anaconda default channel Terms of Service..."
+  conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main
+  conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
+fi
+
 # Install MergeBench
 conda create -y -n merging python=3.10.9
 conda activate merging
@@ -54,10 +62,10 @@ conda deactivate
 conda create -y -n wudi python=3.10.9
 conda activate wudi 
 
-cd /workspace/
-git clone https://github.com/tuanpasg/wudi-merging-llama.git
-
-cd /workspace/wudi-merging-llama/llama
+cd /workspace/mergebench2/merging/wudi/
+# git clone https://github.com/tuanpasg/wudi-merging-llama.git
+pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
+  --index-url https://download.pytorch.org/whl/cu121
 pip install -r requirements.txt
 conda deactivate
 
@@ -74,8 +82,8 @@ pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
 pip install -e .
 pip install hf_transfer
 conda deactivate
-# Install LmEval
 
+# Install LmEval
 conda create -y -n lmeval python=3.10.9
 conda activate lmeval
 

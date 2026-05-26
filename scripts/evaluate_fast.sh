@@ -47,18 +47,18 @@ conda activate lmeval
 # Math (GSM8K)
 lm_eval --model hf \
   --model_args "pretrained=$MODEL" \
-  --tasks gsm8k_cot \
+  --tasks gsm8k_cot,ifeval \
   --device "$DEVICE" \
-  --batch_size 16 \
+  --batch_size 32 \
   --output_path "$OUTPUT_PATH"
 
-# Instruction (IFEval)
-lm_eval --model hf \
-  --model_args "pretrained=$MODEL" \
-  --tasks ifeval \
-  --device "$DEVICE" \
-  --batch_size 8 \
-  --output_path "$OUTPUT_PATH"
+# # Instruction (IFEval)
+# lm_eval --model hf \
+#   --model_args "pretrained=$MODEL" \
+#   --tasks ifeval \
+#   --device "$DEVICE" \
+#   --batch_size 8 \
+#   --output_path "$OUTPUT_PATH"
 
 # Generalization Retention (MMLU subset)
 lm_eval --model hf \
@@ -86,7 +86,7 @@ accelerate launch main.py \
   --precision bf16 \
   --tasks humanevalplus \
   --temperature 0.2 \
-  --n_samples 10 \
+  --n_samples 1 \
   --batch_size 10 \
   --allow_code_execution \
   --metric_output_path "$BIGCODE_OUTPUT_PATH/code_eval.json" \

@@ -1,0 +1,460 @@
+import torch
+import tqdm
+import re
+import utils
+from param import param
+
+class MergingMethod:
+
+    @utils.args_inspector
+    def __init__(
+        self, 
+        models_to_merge, 
+        models_name,
+    ):
+        self.models_name = {n:i for i,n in enumerate(models_name)}
+        # dict(zip(models_name, range(0, N)))
+        self.models_to_merge = models_to_merge
+
+    def get_model(self, model_name):
+        return self.models_to_merge[self.models_name[model_name]]
+
+    def _optimize_wudi_vector(
+        self,
+        vecs_cpu: list,
+        dev: torch.device,
+        iter_num: int,
+        lr: float,
+        weight_decay: float,
+        eps: float,
+    ) -> torch.Tensor:
+        # stack on device: (n_task, out, in)
+        vectors = torch.stack([v.to(dev) for v in vecs_cpu], dim=0)
+
+        # init like the ViT script: sum(vectors)
+        merging_vector = torch.nn.Parameter(vectors.sum(dim=0))
+
+        opt = torch.optim.Adam([merging_vector], lr=lr, weight_decay=weight_decay)
+
+        # l2 norms per task vector
+        l2_norms = torch.square(torch.norm(vectors.reshape(vectors.shape[0], -1), p=2, dim=-1)) + eps
+
+        for _ in range(iter_num):
+            # disturbing_vectors: (n_task, out, in)
+            disturbing = merging_vector.unsqueeze(0) - vectors
+
+            # inner_product: (n_task, out, out)
+            inner = torch.matmul(disturbing, vectors.transpose(1, 2))
+
+            loss = torch.sum((inner * inner) / l2_norms.view(-1, 1, 1))
+
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            opt.step()
+
+        return merging_vector.detach().to("cpu")
+
+    def _sparsify_task_vectors(
+        self,
+        tvs: list,
+        keys: list,
+        K: float,
+    ) -> list:
+        if K > 1:
+            K /= 100
+        if not 0 < K <= 1:
+            raise ValueError(f"K must be in (0, 1] or (0, 100], got {K}")
+
+        sparse_tvs = []
+        for tv in tvs:
+            tv_keys = [k for k in keys if k in tv]
+            flat_tv = torch.cat([tv[k].reshape(-1) for k in tv_keys])
+            keep_count = max(1, int(flat_tv.numel() * K))
+
+            if keep_count == flat_tv.numel():
+                sparse_tvs.append(tv)
+                continue
+
+            threshold_idx = flat_tv.numel() - keep_count + 1
+            threshold, _ = flat_tv.abs().kthvalue(threshold_idx)
+            sparse_tvs.append(param({
+                k: tv[k] * (tv[k].abs() >= threshold)
+                for k in tv_keys
+            }))
+
+        return sparse_tvs
+
+    def _lines_scale_task_vector(
+        self,
+        task_vector_dict: dict,
+        alpha: float,
+        beta: float,
+        num_blocks: int,
+        layer_pattern: re.Pattern,
+    ) -> dict:
+        scaled = {}
+        denom = num_blocks - 1 if num_blocks > 1 else 1
+
+        for name, tensor in task_vector_dict.items():
+            layer_scale = alpha
+            match = layer_pattern.match(name)
+            if match:
+                layer = int(match.group(1))
+                layer_scale = alpha + beta * (layer / denom)
+            scaled[name] = tensor * layer_scale
+
+        print(f"LiNeS: The layers are scaled between {alpha} to {alpha + beta}")
+        return scaled
+
+    @utils.args_inspector
+    @torch.inference_mode()
+    def task_arithmetic(
+        self,
+        base_model: param,
+        models_to_merge: list,
+        scaling: float = 1.0,
+    ):
+        task_vectors = [
+            model - base_model
+            for model in models_to_merge
+        ]
+        return base_model + scaling * sum(task_vectors)
+    
+    @utils.args_inspector
+    def wudi_merge(
+        self,
+        base_model: param,
+        models_to_merge: list,
+        scaling: float = 1.0,
+
+        # WUDI optimizer knobs
+        iter_num: int = 200,
+        lr: float = 1e-5,
+        weight_decay: float = 0.0,
+        device: str = "cuda",   # "cuda" strongly recommended; "cpu" will be very slow
+
+        # fallback for keys not WUDI-optimized
+        fallback: str = "task_arithmetic",  # "task_arithmetic" or "zero"
+        eps: float = 1e-12,
+        verbose: bool = True,
+    ):
+        """
+        WUDI-style merge:
+          - Compute task vectors tv_i = ft_i - base
+          - For selected 2D keys, optimize a merged task vector per key via redundancy loss
+          - For other keys, fallback to sum(tv_i) (Task Arithmetic)
+          - Return base + scaling * merged_task_vector
+        """
+        base_keys = list(base_model.keys())
+
+        def _use_wudi_for_key(name: str, t: torch.Tensor) -> bool:
+            if t.ndim != 2:
+                return False
+            return True
+
+        # task vectors: tv_i = ft_i - base
+        tvs = [m - base_model for m in models_to_merge]
+
+        # choose device
+        if device == "cuda" and not torch.cuda.is_available():
+            device = "cpu"
+        dev = torch.device(device)
+
+        merged_tv = {}
+
+        for k in tqdm.tqdm(base_keys, desc="WUDI merge (per-key)"):
+            if k not in tvs[0]:
+                print(f'[ERROR] {k} is bypassed WUDI optimization due to Missing')
+                continue
+
+            # gather per-task tensors (keep dtype consistent)
+            vecs_cpu = [tv[k] for tv in tvs]
+            t0 = vecs_cpu[0]
+
+            # keys not shared / shape mismatch -> fallback
+            if any(v.shape != t0.shape for v in vecs_cpu):
+                print(f'[ERROR] {k} is bypassed WUDI optimization due to Shape Mismatch')
+                if fallback == "zero":
+                    merged_tv[k] = torch.zeros_like(t0)
+                else:
+                    merged_tv[k] = torch.stack(vecs_cpu, dim=0).sum(dim=0)
+                continue
+
+            if _use_wudi_for_key(k, t0):
+                merged_tv[k] = self._optimize_wudi_vector(
+                    vecs_cpu=vecs_cpu,
+                    dev=dev,
+                    iter_num=iter_num,
+                    lr=lr,
+                    weight_decay=weight_decay,
+                    eps=eps,
+                )
+
+                if verbose:
+                     print(f'[INFO] {k} is optimized under WUDI')
+
+            else:
+                # fallback for embeddings / norms / lm_head / 1D etc.
+                print(f'{k} is not optimized with WUDI and fallback to {fallback}')
+                if fallback == "zero":
+                    merged_tv[k] = torch.zeros_like(t0)
+                else:
+                    merged_tv[k] = torch.stack(vecs_cpu, dim=0).sum(dim=0)
+
+        # scale the merged task vector and apply to base
+        merged_task_param = param({k: (scaling * v) for k, v in merged_tv.items()})
+        merged_param = base_model + merged_task_param
+        return merged_param
+
+    @utils.args_inspector
+    def sparsed_wudi_merge(
+        self,
+        base_model: param,
+        models_to_merge: list,
+        scaling: float = 1.0,
+
+        # WUDI optimizer knobs
+        iter_num: int = 200,
+        lr: float = 1e-5,
+        weight_decay: float = 0.0,
+        device: str = "cuda",   # "cuda" strongly recommended; "cpu" will be very slow
+
+        # TIES-style top-k sparsification before WUDI
+        K: float = 0.7,
+
+        # fallback for keys not WUDI-optimized
+        fallback: str = "task_arithmetic",  # "task_arithmetic" or "zero"
+        eps: float = 1e-12,
+        verbose: bool = True,
+    ):
+        """
+        Sparsed WUDI-style merge:
+          - Compute task vectors tv_i = ft_i - base
+          - Apply TIES-style top-k sparsification to each task vector
+          - For 2D keys, optimize a merged task vector per key via redundancy loss
+          - For other keys, fallback to sum(tv_i) (Task Arithmetic)
+          - Return base + scaling * merged_task_vector
+        """
+        base_keys = list(base_model.keys())
+
+        def _use_wudi_for_key(name: str, t: torch.Tensor) -> bool:
+            if t.ndim != 2:
+                return False
+            return True
+
+        # task vectors: tv_i = ft_i - base
+        tvs = [m - base_model for m in models_to_merge]
+        tvs = self._sparsify_task_vectors(tvs=tvs, keys=base_keys, K=K)
+
+        # choose device
+        if device == "cuda" and not torch.cuda.is_available():
+            device = "cpu"
+        dev = torch.device(device)
+
+        merged_tv = {}
+
+        for k in tqdm.tqdm(base_keys, desc="Sparsed WUDI merge (per-key)"):
+            if k not in tvs[0]:
+                print(f'[ERROR] {k} is bypassed WUDI optimization due to Missing')
+                continue
+
+            # gather per-task tensors (keep dtype consistent)
+            vecs_cpu = [tv[k] for tv in tvs]
+            t0 = vecs_cpu[0]
+
+            # keys not shared / shape mismatch -> fallback
+            if any(v.shape != t0.shape for v in vecs_cpu):
+                print(f'[ERROR] {k} is bypassed WUDI optimization due to Shape Mismatch')
+                if fallback == "zero":
+                    merged_tv[k] = torch.zeros_like(t0)
+                else:
+                    merged_tv[k] = torch.stack(vecs_cpu, dim=0).sum(dim=0)
+                continue
+
+            if _use_wudi_for_key(k, t0):
+                merged_tv[k] = self._optimize_wudi_vector(
+                    vecs_cpu=vecs_cpu,
+                    dev=dev,
+                    iter_num=iter_num,
+                    lr=lr,
+                    weight_decay=weight_decay,
+                    eps=eps,
+                )
+
+                if verbose:
+                     print(f'[INFO] {k} is optimized under sparsed WUDI')
+
+            else:
+                # fallback for embeddings / norms / lm_head / 1D etc.
+                print(f'{k} is not optimized with WUDI and fallback to {fallback}')
+                if fallback == "zero":
+                    merged_tv[k] = torch.zeros_like(t0)
+                else:
+                    merged_tv[k] = torch.stack(vecs_cpu, dim=0).sum(dim=0)
+
+        # scale the merged task vector and apply to base
+        merged_task_param = param({k: (scaling * v) for k, v in merged_tv.items()})
+        merged_param = base_model + merged_task_param
+        return merged_param
+    
+    @utils.args_inspector
+    def selective_wudi_merge(
+        self,
+        base_model: param,
+        models_to_merge: list,
+        scaling: float = 1.0,
+
+        # WUDI optimizer knobs
+        iter_num: int = 200,
+        lr: float = 1e-5,
+        weight_decay: float = 0.0,
+        device: str = "cuda",   # "cuda" strongly recommended; "cpu" will be very slow
+
+        # which params to run WUDI on
+        variant: str = "wudi_all_linear",
+
+        # fallback for keys not WUDI-optimized
+        fallback: str = "task_arithmetic",  # "task_arithmetic" or "zero"
+        eps: float = 1e-12,
+        verbose: bool = True,
+    ):
+        """
+        WUDI-style merge:
+          - Compute task vectors tv_i = ft_i - base
+          - For selected 2D keys, optimize a merged task vector per key via redundancy loss
+          - For other keys, fallback to sum(tv_i) (Task Arithmetic)
+          - Return base + scaling * merged_task_vector
+        """
+
+        attention_proj = r".*self_attn\.(q_proj|k_proj|v_proj|o_proj)\.weight$"
+        mlp_proj = r".*mlp\.(gate_proj|up_proj|down_proj)\.weight$"
+        projection_patterns = [attention_proj, mlp_proj]
+        layer_pattern = re.compile(r".*model\.layers\.(\d+)\..*")
+
+        def _match_any(patterns, name: str) -> bool:
+            return any(re.match(p, name) for p in patterns)
+
+        def _infer_layer_count(keys) -> int:
+            layer_indices = []
+            for name in keys:
+                match = layer_pattern.match(name)
+                if match:
+                    layer_indices.append(int(match.group(1)))
+            if not layer_indices:
+                return 0
+            return max(layer_indices) + 1
+
+        base_keys = list(base_model.keys())
+        num_layers = _infer_layer_count(base_keys)
+
+        use_lines_scaling = variant == "wudi_lines_all_linear"
+
+        if variant in {"wudi_all_linear", "wudi_lines_all_linear"}:
+            variant_include = None
+            selected_layers = None
+        elif variant == "wudi_attention_only":
+            variant_include = [attention_proj]
+            selected_layers = None
+        elif variant == "wudi_mlp_only":
+            variant_include = [mlp_proj]
+            selected_layers = None
+        elif variant in {"wudi_last_7_layers", "wudi_last_14_layers", "wudi_last_21_layers"}:
+            if num_layers == 0:
+                raise ValueError("Could not infer Llama layer count from model.layers.{idx} parameter names")
+            last_n_by_variant = {
+                "wudi_last_7_layers": 7,
+                "wudi_last_14_layers": 14,
+                "wudi_last_21_layers": 21,
+            }
+            last_n = last_n_by_variant[variant]
+            start_layer = max(num_layers - last_n, 0)
+            selected_layers = set(range(start_layer, num_layers))
+            variant_include = projection_patterns
+        else:
+            raise ValueError(
+                f"Unknown WUDI variant={variant}. Choose one of: "
+                "wudi_all_linear, wudi_lines_all_linear, wudi_attention_only, wudi_mlp_only, "
+                "wudi_last_7_layers, wudi_last_14_layers, wudi_last_21_layers"
+            )
+
+        def _layer_index(name: str):
+            match = layer_pattern.match(name)
+            if not match:
+                return None
+            return int(match.group(1))
+
+        def _use_wudi_for_key(name: str, t: torch.Tensor) -> bool:
+            if t.ndim != 2:
+                return False
+            if variant_include and not _match_any(variant_include, name):
+                return False
+            if selected_layers is not None and _layer_index(name) not in selected_layers:
+                return False
+            return True
+
+        # task vectors: tv_i = ft_i - base
+        tvs = [m - base_model for m in models_to_merge]
+
+        # choose device
+        if device == "cuda" and not torch.cuda.is_available():
+            device = "cpu"
+        dev = torch.device(device)
+
+        merged_tv = {}
+
+        for k in tqdm.tqdm(base_keys, desc="WUDI merge (per-key)"):
+            if k not in tvs[0]:
+                print(f'[ERROR] {k} is bypassed WUDI optimization due to Missing')
+                continue
+
+            # gather per-task tensors (keep dtype consistent)
+            vecs_cpu = [tv[k] for tv in tvs]
+            t0 = vecs_cpu[0]
+
+            # keys not shared / shape mismatch -> fallback
+            if any(v.shape != t0.shape for v in vecs_cpu):
+                print(f'[ERROR] {k} is bypassed WUDI optimization due to Shape Mismatch')
+                if fallback == "zero":
+                    merged_tv[k] = torch.zeros_like(t0)
+                else:
+                    merged_tv[k] = torch.stack(vecs_cpu, dim=0).sum(dim=0)
+                continue
+
+            if _use_wudi_for_key(k, t0):
+                merged_tv[k] = self._optimize_wudi_vector(
+                    vecs_cpu=vecs_cpu,
+                    dev=dev,
+                    iter_num=iter_num,
+                    lr=lr,
+                    weight_decay=weight_decay,
+                    eps=eps,
+                )
+
+                if verbose:
+                     print(f'[INFO] {k} is optimized under WUDI')
+
+            else:
+                # fallback for embeddings / norms / lm_head / 1D etc.
+                print(f'{k} is not optimized with WUDI and fallback to {fallback}')
+                if fallback == "zero":
+                    merged_tv[k] = torch.zeros_like(t0)
+                else:
+                    merged_tv[k] = torch.stack(vecs_cpu, dim=0).sum(dim=0)
+
+        # scale the merged task vector and apply to base
+        if use_lines_scaling:
+            if num_layers == 0:
+                raise ValueError("Could not infer Llama layer count from model.layers.{idx} parameter names")
+            merged_tv = self._lines_scale_task_vector(
+                task_vector_dict=merged_tv,
+                alpha=1 / len(models_to_merge),
+                beta=scaling,
+                num_blocks=num_layers,
+                layer_pattern=layer_pattern,
+            )
+            merged_task_param = param(merged_tv)
+        else:
+            merged_task_param = param({k: (scaling * v) for k, v in merged_tv.items()})
+        merged_param = base_model + merged_task_param
+        return merged_param
+    
