@@ -27,32 +27,135 @@ class MergingMethod:
         lr: float,
         weight_decay: float,
         eps: float,
+        warm_start: bool = True,
+        cfs_ridge: float = 1e-5,
     ) -> torch.Tensor:
+        if cfs_ridge < 0:
+            raise ValueError(f"cfs_ridge must be >= 0, got {cfs_ridge}")
+
         # stack on device: (n_task, out, in)
         vectors = torch.stack([v.to(dev) for v in vecs_cpu], dim=0)
 
-        # init like the ViT script: sum(vectors)
-        merging_vector = torch.nn.Parameter(vectors.sum(dim=0))
+        # For numerical stability, solve in fp32
+        orig_dtype = vectors.dtype
+        vectors_f = vectors.float()
 
-        opt = torch.optim.Adam([merging_vector], lr=lr, weight_decay=weight_decay)
+        n_task, out_dim, in_dim = vectors_f.shape
 
-        # l2 norms per task vector
-        l2_norms = torch.square(torch.norm(vectors.reshape(vectors.shape[0], -1), p=2, dim=-1)) + eps
+        # l2 norms per task vector: (n_task,)
+        l2_norms = (
+            torch.square(torch.norm(vectors_f.reshape(n_task, -1), p=2, dim=-1))
+            + eps
+        )
 
+        weights = 1.0 / l2_norms  # (n_task,)
+
+        if warm_start:
+            # Closed-form initialization
+            #
+            # A = sum_i w_i * V_i.T @ V_i          shape: (in, in)
+            # B = sum_i w_i * V_i @ V_i.T @ V_i   shape: (out, in)
+            #
+            # delta @ A = B
+            # delta = B @ A^{-1}
+
+            A = torch.zeros(
+                (in_dim, in_dim),
+                device=dev,
+                dtype=torch.float32,
+            )
+
+            B = torch.zeros(
+                (out_dim, in_dim),
+                device=dev,
+                dtype=torch.float32,
+            )
+
+            for i in range(n_task):
+                v = vectors_f[i]          # (out, in)
+                w = weights[i]
+
+                vt_v = v.T @ v           # (in, in)
+                A += w * vt_v
+                B += w * (v @ vt_v)      # (out, in)
+
+            # Ridge regularization for stability
+            A = A + cfs_ridge * torch.eye(
+                in_dim,
+                device=dev,
+                dtype=torch.float32,
+            )
+
+            # Solve delta @ A = B
+            # Equivalent to A.T @ delta.T = B.T
+            init_delta = torch.linalg.solve(A.T, B.T).T
+
+            merging_vector = torch.nn.Parameter(init_delta)
+
+        else:
+            # Original WUDI initialization
+            merging_vector = torch.nn.Parameter(vectors_f.sum(dim=0))
+
+        opt = torch.optim.Adam(
+            [merging_vector],
+            lr=lr,
+            weight_decay=weight_decay,
+        )
+
+        # Few-step Adam refinement
         for _ in range(iter_num):
-            # disturbing_vectors: (n_task, out, in)
-            disturbing = merging_vector.unsqueeze(0) - vectors
+            disturbing = merging_vector.unsqueeze(0).float() - vectors_f
 
-            # inner_product: (n_task, out, out)
-            inner = torch.matmul(disturbing, vectors.transpose(1, 2))
+            # inner: (n_task, out, out)
+            inner = torch.matmul(
+                disturbing,
+                vectors_f.transpose(1, 2),
+            )
 
-            loss = torch.sum((inner * inner) / l2_norms.view(-1, 1, 1))
+            loss = torch.sum(
+                (inner * inner) / l2_norms.view(-1, 1, 1)
+            )
 
             opt.zero_grad(set_to_none=True)
             loss.backward()
             opt.step()
 
-        return merging_vector.detach().to("cpu")
+        return merging_vector.detach().to(dtype=orig_dtype, device="cpu")
+
+    # def _optimize_wudi_vector(
+    #     self,
+    #     vecs_cpu: list,
+    #     dev: torch.device,
+    #     iter_num: int,
+    #     lr: float,
+    #     weight_decay: float,
+    #     eps: float,
+    # ) -> torch.Tensor:
+    #     # stack on device: (n_task, out, in)
+    #     vectors = torch.stack([v.to(dev) for v in vecs_cpu], dim=0)
+
+    #     # init like the ViT script: sum(vectors)
+    #     merging_vector = torch.nn.Parameter(vectors.sum(dim=0))
+
+    #     opt = torch.optim.Adam([merging_vector], lr=lr, weight_decay=weight_decay)
+
+    #     # l2 norms per task vector
+    #     l2_norms = torch.square(torch.norm(vectors.reshape(vectors.shape[0], -1), p=2, dim=-1)) + eps
+
+    #     for _ in range(iter_num):
+    #         # disturbing_vectors: (n_task, out, in)
+    #         disturbing = merging_vector.unsqueeze(0) - vectors
+
+    #         # inner_product: (n_task, out, out)
+    #         inner = torch.matmul(disturbing, vectors.transpose(1, 2))
+
+    #         loss = torch.sum((inner * inner) / l2_norms.view(-1, 1, 1))
+
+    #         opt.zero_grad(set_to_none=True)
+    #         loss.backward()
+    #         opt.step()
+
+    #     return merging_vector.detach().to("cpu")
 
     def _sparsify_task_vectors(
         self,
@@ -60,10 +163,8 @@ class MergingMethod:
         keys: list,
         K: float,
     ) -> list:
-        if K > 1:
-            K /= 100
         if not 0 < K <= 1:
-            raise ValueError(f"K must be in (0, 1] or (0, 100], got {K}")
+            raise ValueError(f"K must be in (0, 1], got {K}")
 
         sparse_tvs = []
         for tv in tvs:
@@ -79,6 +180,27 @@ class MergingMethod:
             threshold, _ = flat_tv.abs().kthvalue(threshold_idx)
             sparse_tvs.append(param({
                 k: tv[k] * (tv[k].abs() >= threshold)
+                for k in tv_keys
+            }))
+
+        return sparse_tvs
+
+    def _dare_sparsify_task_vectors(
+        self,
+        tvs: list,
+        keys: list,
+        K: float,
+    ) -> list:
+        if not 0 < K <= 1:
+            raise ValueError(f"K must be in (0, 1], got {K}")
+
+        sparse_tvs = []
+        for tv in tvs:
+            tv_keys = [k for k in keys if k in tv]
+            sparse_tvs.append(param({
+                k: tv[k] * torch.bernoulli(
+                    torch.full(tv[k].shape, K, device=tv[k].device, dtype=torch.float32)
+                ).to(dtype=tv[k].dtype) / K
                 for k in tv_keys
             }))
 
@@ -144,6 +266,8 @@ class MergingMethod:
         fallback: str = "task_arithmetic",  # "task_arithmetic" or "zero"
         fallback_scaling: float = 1.0,
         eps: float = 1e-12,
+        warm_start: bool = True,
+        cfs_ridge: float = 1e-5,
         verbose: bool = True,
     ):
         """
@@ -190,6 +314,8 @@ class MergingMethod:
                     lr=lr,
                     weight_decay=weight_decay,
                     eps=eps,
+                    warm_start=warm_start,
+                    cfs_ridge=cfs_ridge,
                 )
 
                 if verbose:
@@ -221,19 +347,22 @@ class MergingMethod:
         weight_decay: float = 0.0,
         device: str = "cuda",   # "cuda" strongly recommended; "cpu" will be very slow
 
-        # TIES-style top-k sparsification before WUDI
+        # Sparsification before WUDI
         K: float = 0.7,
+        sparsify_variant: str = "ties_sparsify",
 
         # fallback for keys not WUDI-optimized
         fallback: str = "task_arithmetic",  # "task_arithmetic" or "zero"
         fallback_scaling: float = 1.0,
         eps: float = 1e-12,
+        warm_start: bool = True,
+        cfs_ridge: float = 1e-5,
         verbose: bool = True,
     ):
         """
         Sparsed WUDI-style merge:
           - Compute task vectors tv_i = ft_i - base
-          - Apply TIES-style top-k sparsification to each task vector
+          - Apply ties_sparsify or dare_sparsify to each task vector
           - For 2D keys, optimize a merged task vector per key via redundancy loss
           - For other keys, fallback to sum(tv_i) (Task Arithmetic)
           - Return base + scaling * merged_task_vector
@@ -247,7 +376,15 @@ class MergingMethod:
 
         # task vectors: tv_i = ft_i - base
         tvs = [m - base_model for m in models_to_merge]
-        tvs = self._sparsify_task_vectors(tvs=tvs, keys=base_keys, K=K)
+        if sparsify_variant == "ties_sparsify":
+            tvs = self._sparsify_task_vectors(tvs=tvs, keys=base_keys, K=K)
+        elif sparsify_variant == "dare_sparsify":
+            tvs = self._dare_sparsify_task_vectors(tvs=tvs, keys=base_keys, K=K)
+        else:
+            raise ValueError(
+                f"Unknown sparsify_variant={sparsify_variant}. "
+                "Choose one of: ties_sparsify, dare_sparsify"
+            )
 
         # choose device
         if device == "cuda" and not torch.cuda.is_available():
@@ -276,6 +413,8 @@ class MergingMethod:
                     lr=lr,
                     weight_decay=weight_decay,
                     eps=eps,
+                    warm_start=warm_start,
+                    cfs_ridge=cfs_ridge,
                 )
 
                 if verbose:
@@ -314,6 +453,8 @@ class MergingMethod:
         fallback: str = "task_arithmetic",  # "task_arithmetic" or "zero"
         fallback_scaling: float = 1.0,
         eps: float = 1e-12,
+        warm_start: bool = True,
+        cfs_ridge: float = 1e-5,
         verbose: bool = True,
     ):
         """
@@ -420,6 +561,8 @@ class MergingMethod:
                     lr=lr,
                     weight_decay=weight_decay,
                     eps=eps,
+                    warm_start=warm_start,
+                    cfs_ridge=cfs_ridge,
                 )
 
                 if verbose:

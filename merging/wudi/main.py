@@ -60,7 +60,7 @@ def parse_args():
     ap = argparse.ArgumentParser("Merge Llama-3.2-3B MergeBench finetunes (merge-only)")
     ap.add_argument("--out", required=True, help="Output dir for merged model")
 
-    ap.add_argument("--scaling", type=float, default=1,
+    ap.add_argument("--scaling", type=float, default=1.0,
                     help="Scaling applied to merged task vector (TA typical: 1/num_tasks; for WUDI also supported)")
     ap.add_argument("--dtype", choices=["bfloat16", "float16", "float32"], default="bfloat16")
     ap.add_argument("--device_map", default="cpu", help="HF loading device_map (cpu is safest)")
@@ -88,12 +88,20 @@ def parse_args():
     ap.add_argument("--wudi_lr", type=float, default=1e-5)
     ap.add_argument("--wudi_weight_decay", type=float, default=0.0)
     ap.add_argument("--wudi_device", default="cuda", help="cuda recommended; cpu will be very slow")
+    ap.add_argument("--no_wudi_warm_start", dest="wudi_warm_start", action="store_false",
+                    help="Disable closed-form warm start for WUDI optimization")
+    ap.add_argument("--wudi_cfs_ridge", type=float, default=1e-5,
+                    help="Ridge regularization used by WUDI closed-form warm start")
     ap.add_argument("--wudi_fallback", choices=["task_arithmetic", "zero"], default="task_arithmetic",
                     help="How to merge keys not optimized by WUDI")
     ap.add_argument("--wudi_fallback_scaling", type=float, default=1.0,
                     help="Scaling applied only to task_arithmetic fallback vectors")
     ap.add_argument("--wudi_K", type=float, default=0.7,
-                    help="Top-k fraction for sparsed_wudi_merge; values >1 are interpreted as percentages")
+                    help="Keep fraction for sparsed_wudi_merge; must satisfy 0 < K <= 1")
+    ap.add_argument("--wudi_sparsify_variant",
+                    choices=["ties_sparsify", "dare_sparsify"],
+                    default="ties_sparsify",
+                    help="Sparsification variant for sparsed_wudi_merge")
     return ap.parse_args()
 
 
@@ -143,6 +151,8 @@ def main():
             "lr": args.wudi_lr,
             "weight_decay": args.wudi_weight_decay,
             "device": args.wudi_device,
+            "warm_start": args.wudi_warm_start,
+            "cfs_ridge": args.wudi_cfs_ridge,
             "fallback": args.wudi_fallback,
             "fallback_scaling": args.wudi_fallback_scaling,
             "eps": 1e-12,
@@ -150,6 +160,7 @@ def main():
         }
         if args.merge_method == "sparsed_wudi_merge":
             merge_kwargs["K"] = args.wudi_K
+            merge_kwargs["sparsify_variant"] = args.wudi_sparsify_variant
         if args.merge_method == "selective_wudi_merge":
             merge_kwargs["variant"] = args.wudi_variant
 

@@ -42,9 +42,9 @@ python3 main.py \
  --exclude ".*embed.*" ".*lm_head.*"
 
  python3 main.py \
- --out /workspace/outs/wudi \
+ --out /workspace/outs/wudi_sparsed_0.8 \
  --merge_method sparsed_wudi_merge \
- --wudi_K 0.7 \
+ --wudi_K 0.8 \
  --scaling 1 \
  --wudi_device cuda \
  --exclude ".*embed.*" ".*lm_head.*"
