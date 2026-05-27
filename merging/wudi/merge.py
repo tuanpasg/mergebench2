@@ -106,6 +106,13 @@ class MergingMethod:
         print(f"LiNeS: The layers are scaled between {alpha} to {alpha + beta}")
         return scaled
 
+    def _task_arithmetic_fallback(
+        self,
+        vecs_cpu: list,
+        fallback_scaling: float,
+    ) -> torch.Tensor:
+        return fallback_scaling * torch.stack(vecs_cpu, dim=0).sum(dim=0)
+
     @utils.args_inspector
     @torch.inference_mode()
     def task_arithmetic(
@@ -135,6 +142,7 @@ class MergingMethod:
 
         # fallback for keys not WUDI-optimized
         fallback: str = "task_arithmetic",  # "task_arithmetic" or "zero"
+        fallback_scaling: float = 1.0,
         eps: float = 1e-12,
         verbose: bool = True,
     ):
@@ -164,21 +172,15 @@ class MergingMethod:
 
         for k in tqdm.tqdm(base_keys, desc="WUDI merge (per-key)"):
             if k not in tvs[0]:
-                print(f'[ERROR] {k} is bypassed WUDI optimization due to Missing')
-                continue
+                raise ValueError(f"Missing key in task vectors: {k}")
 
             # gather per-task tensors (keep dtype consistent)
             vecs_cpu = [tv[k] for tv in tvs]
             t0 = vecs_cpu[0]
 
-            # keys not shared / shape mismatch -> fallback
+            # Standard checkpoints should have identical tensor shapes.
             if any(v.shape != t0.shape for v in vecs_cpu):
-                print(f'[ERROR] {k} is bypassed WUDI optimization due to Shape Mismatch')
-                if fallback == "zero":
-                    merged_tv[k] = torch.zeros_like(t0)
-                else:
-                    merged_tv[k] = torch.stack(vecs_cpu, dim=0).sum(dim=0)
-                continue
+                raise ValueError(f"Shape mismatch for key: {k}")
 
             if _use_wudi_for_key(k, t0):
                 merged_tv[k] = self._optimize_wudi_vector(
@@ -199,7 +201,7 @@ class MergingMethod:
                 if fallback == "zero":
                     merged_tv[k] = torch.zeros_like(t0)
                 else:
-                    merged_tv[k] = torch.stack(vecs_cpu, dim=0).sum(dim=0)
+                    merged_tv[k] = self._task_arithmetic_fallback(vecs_cpu, fallback_scaling)
 
         # scale the merged task vector and apply to base
         merged_task_param = param({k: (scaling * v) for k, v in merged_tv.items()})
@@ -224,6 +226,7 @@ class MergingMethod:
 
         # fallback for keys not WUDI-optimized
         fallback: str = "task_arithmetic",  # "task_arithmetic" or "zero"
+        fallback_scaling: float = 1.0,
         eps: float = 1e-12,
         verbose: bool = True,
     ):
@@ -255,21 +258,15 @@ class MergingMethod:
 
         for k in tqdm.tqdm(base_keys, desc="Sparsed WUDI merge (per-key)"):
             if k not in tvs[0]:
-                print(f'[ERROR] {k} is bypassed WUDI optimization due to Missing')
-                continue
+                raise ValueError(f"Missing key in task vectors: {k}")
 
             # gather per-task tensors (keep dtype consistent)
             vecs_cpu = [tv[k] for tv in tvs]
             t0 = vecs_cpu[0]
 
-            # keys not shared / shape mismatch -> fallback
+            # Standard checkpoints should have identical tensor shapes.
             if any(v.shape != t0.shape for v in vecs_cpu):
-                print(f'[ERROR] {k} is bypassed WUDI optimization due to Shape Mismatch')
-                if fallback == "zero":
-                    merged_tv[k] = torch.zeros_like(t0)
-                else:
-                    merged_tv[k] = torch.stack(vecs_cpu, dim=0).sum(dim=0)
-                continue
+                raise ValueError(f"Shape mismatch for key: {k}")
 
             if _use_wudi_for_key(k, t0):
                 merged_tv[k] = self._optimize_wudi_vector(
@@ -290,7 +287,7 @@ class MergingMethod:
                 if fallback == "zero":
                     merged_tv[k] = torch.zeros_like(t0)
                 else:
-                    merged_tv[k] = torch.stack(vecs_cpu, dim=0).sum(dim=0)
+                    merged_tv[k] = self._task_arithmetic_fallback(vecs_cpu, fallback_scaling)
 
         # scale the merged task vector and apply to base
         merged_task_param = param({k: (scaling * v) for k, v in merged_tv.items()})
@@ -315,6 +312,7 @@ class MergingMethod:
 
         # fallback for keys not WUDI-optimized
         fallback: str = "task_arithmetic",  # "task_arithmetic" or "zero"
+        fallback_scaling: float = 1.0,
         eps: float = 1e-12,
         verbose: bool = True,
     ):
@@ -404,21 +402,15 @@ class MergingMethod:
 
         for k in tqdm.tqdm(base_keys, desc="WUDI merge (per-key)"):
             if k not in tvs[0]:
-                print(f'[ERROR] {k} is bypassed WUDI optimization due to Missing')
-                continue
+                raise ValueError(f"Missing key in task vectors: {k}")
 
             # gather per-task tensors (keep dtype consistent)
             vecs_cpu = [tv[k] for tv in tvs]
             t0 = vecs_cpu[0]
 
-            # keys not shared / shape mismatch -> fallback
+            # Standard checkpoints should have identical tensor shapes.
             if any(v.shape != t0.shape for v in vecs_cpu):
-                print(f'[ERROR] {k} is bypassed WUDI optimization due to Shape Mismatch')
-                if fallback == "zero":
-                    merged_tv[k] = torch.zeros_like(t0)
-                else:
-                    merged_tv[k] = torch.stack(vecs_cpu, dim=0).sum(dim=0)
-                continue
+                raise ValueError(f"Shape mismatch for key: {k}")
 
             if _use_wudi_for_key(k, t0):
                 merged_tv[k] = self._optimize_wudi_vector(
@@ -439,7 +431,7 @@ class MergingMethod:
                 if fallback == "zero":
                     merged_tv[k] = torch.zeros_like(t0)
                 else:
-                    merged_tv[k] = torch.stack(vecs_cpu, dim=0).sum(dim=0)
+                    merged_tv[k] = self._task_arithmetic_fallback(vecs_cpu, fallback_scaling)
 
         # scale the merged task vector and apply to base
         if use_lines_scaling:

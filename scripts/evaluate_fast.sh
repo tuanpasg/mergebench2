@@ -86,7 +86,7 @@ accelerate launch main.py \
   --precision bf16 \
   --tasks humanevalplus \
   --temperature 0.2 \
-  --n_samples 1 \
+  --n_samples 10 \
   --batch_size 10 \
   --allow_code_execution \
   --metric_output_path "$BIGCODE_OUTPUT_PATH/code_eval.json" \

@@ -32,3 +32,19 @@ python3 main.py \
  --scaling 1 \
  --wudi_device cuda \
  --exclude ".*embed.*" ".*lm_head.*"
+
+python3 main.py \
+ --out /workspace/outs/wudi_last_21_layers \
+ --merge_method selective_wudi_merge \
+ --wudi_variant wudi_last_21_layers\
+ --scaling 1 \
+ --wudi_device cuda \
+ --exclude ".*embed.*" ".*lm_head.*"
+
+ python3 main.py \
+ --out /workspace/outs/wudi \
+ --merge_method sparsed_wudi_merge \
+ --wudi_K 0.7 \
+ --scaling 1 \
+ --wudi_device cuda \
+ --exclude ".*embed.*" ".*lm_head.*"

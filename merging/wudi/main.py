@@ -60,7 +60,7 @@ def parse_args():
     ap = argparse.ArgumentParser("Merge Llama-3.2-3B MergeBench finetunes (merge-only)")
     ap.add_argument("--out", required=True, help="Output dir for merged model")
 
-    ap.add_argument("--scaling", type=float, default=0.3333333333,
+    ap.add_argument("--scaling", type=float, default=1,
                     help="Scaling applied to merged task vector (TA typical: 1/num_tasks; for WUDI also supported)")
     ap.add_argument("--dtype", choices=["bfloat16", "float16", "float32"], default="bfloat16")
     ap.add_argument("--device_map", default="cpu", help="HF loading device_map (cpu is safest)")
@@ -90,6 +90,8 @@ def parse_args():
     ap.add_argument("--wudi_device", default="cuda", help="cuda recommended; cpu will be very slow")
     ap.add_argument("--wudi_fallback", choices=["task_arithmetic", "zero"], default="task_arithmetic",
                     help="How to merge keys not optimized by WUDI")
+    ap.add_argument("--wudi_fallback_scaling", type=float, default=1.0,
+                    help="Scaling applied only to task_arithmetic fallback vectors")
     ap.add_argument("--wudi_K", type=float, default=0.7,
                     help="Top-k fraction for sparsed_wudi_merge; values >1 are interpreted as percentages")
     return ap.parse_args()
@@ -142,6 +144,7 @@ def main():
             "weight_decay": args.wudi_weight_decay,
             "device": args.wudi_device,
             "fallback": args.wudi_fallback,
+            "fallback_scaling": args.wudi_fallback_scaling,
             "eps": 1e-12,
             "verbose": True,
         }
