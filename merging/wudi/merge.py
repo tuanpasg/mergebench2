@@ -36,9 +36,8 @@ class MergingMethod:
         # stack on device: (n_task, out, in)
         vectors = torch.stack([v.to(dev) for v in vecs_cpu], dim=0)
 
-        # For numerical stability, solve in fp32
         orig_dtype = vectors.dtype
-        vectors_f = vectors.float()
+        vectors_f = vectors
 
         n_task, out_dim, in_dim = vectors_f.shape
 
@@ -51,49 +50,22 @@ class MergingMethod:
         weights = 1.0 / l2_norms  # (n_task,)
 
         if warm_start:
-            # Closed-form initialization
-            #
-            # A = sum_i w_i * V_i.T @ V_i          shape: (in, in)
-            # B = sum_i w_i * V_i @ V_i.T @ V_i   shape: (out, in)
-            #
-            # delta @ A = B
-            # delta = B @ A^{-1}
-
-            A = torch.zeros(
-                (in_dim, in_dim),
-                device=dev,
-                dtype=torch.float32,
-            )
-
-            B = torch.zeros(
-                (out_dim, in_dim),
-                device=dev,
-                dtype=torch.float32,
-            )
+            A = torch.zeros((in_dim, in_dim), device=dev, dtype=torch.float32)
+            B = torch.zeros((out_dim, in_dim), device=dev, dtype=torch.float32)
 
             for i in range(n_task):
-                v = vectors_f[i]          # (out, in)
-                w = weights[i]
+                v = vectors_f[i].float()
+                w = weights[i].float()
 
-                vt_v = v.T @ v           # (in, in)
+                vt_v = v.T @ v
                 A += w * vt_v
-                B += w * (v @ vt_v)      # (out, in)
+                B += w * (v @ vt_v)
 
-            # Ridge regularization for stability
-            A = A + cfs_ridge * torch.eye(
-                in_dim,
-                device=dev,
-                dtype=torch.float32,
-            )
+            A = A + cfs_ridge * torch.eye(in_dim, device=dev, dtype=torch.float32)
 
-            # Solve delta @ A = B
-            # Equivalent to A.T @ delta.T = B.T
             init_delta = torch.linalg.solve(A.T, B.T).T
-
-            merging_vector = torch.nn.Parameter(init_delta)
-
+            merging_vector = torch.nn.Parameter(init_delta.to(dtype=orig_dtype))
         else:
-            # Original WUDI initialization
             merging_vector = torch.nn.Parameter(vectors_f.sum(dim=0))
 
         opt = torch.optim.Adam(
@@ -104,7 +76,7 @@ class MergingMethod:
 
         # Few-step Adam refinement
         for _ in range(iter_num):
-            disturbing = merging_vector.unsqueeze(0).float() - vectors_f
+            disturbing = merging_vector.unsqueeze(0) - vectors_f
 
             # inner: (n_task, out, out)
             inner = torch.matmul(
