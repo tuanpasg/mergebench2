@@ -233,7 +233,42 @@ class MergingMethod:
         vecs_cpu: list,
         fallback_scaling: float,
     ) -> torch.Tensor:
-        return fallback_scaling * torch.stack(vecs_cpu, dim=0).sum(dim=0)
+        merged = torch.zeros_like(vecs_cpu[0])
+        for v in vecs_cpu:
+            merged.add_(v)
+        return fallback_scaling * merged
+
+    def _get_task_vectors_for_key(
+        self,
+        base_model: param,
+        models_to_merge: list,
+        key: str,
+    ) -> list:
+        if key not in models_to_merge[0]:
+            raise ValueError(f"Missing key in task vectors: {key}")
+
+        base_tensor = base_model[key]
+        vecs_cpu = []
+        for model in models_to_merge:
+            if key not in model:
+                raise ValueError(f"Missing key in model to merge: {key}")
+            if model[key].shape != base_tensor.shape:
+                raise ValueError(f"Shape mismatch for key: {key}")
+            vecs_cpu.append(model[key] - base_tensor)
+        return vecs_cpu
+
+    def _write_merged_key(
+        self,
+        base_model: param,
+        key: str,
+        merged_delta: torch.Tensor,
+        scaling: float,
+    ):
+        delta = merged_delta.to(
+            device=base_model[key].device,
+            dtype=base_model[key].dtype,
+        )
+        base_model.param_dict[key].add_(delta, alpha=scaling)
 
     @utils.args_inspector
     @torch.inference_mode()
@@ -284,30 +319,22 @@ class MergingMethod:
                 return False
             return True
 
-        # task vectors: tv_i = ft_i - base
-        tvs = [m - base_model for m in models_to_merge]
-
         # choose device
         if device == "cuda" and not torch.cuda.is_available():
             device = "cpu"
         dev = torch.device(device)
 
-        merged_tv = {}
-
         for k in tqdm.tqdm(base_keys, desc="WUDI merge (per-key)"):
-            if k not in tvs[0]:
-                raise ValueError(f"Missing key in task vectors: {k}")
-
-            # gather per-task tensors (keep dtype consistent)
-            vecs_cpu = [tv[k] for tv in tvs]
+            # Build task vectors only for this key to avoid full-checkpoint deltas.
+            vecs_cpu = self._get_task_vectors_for_key(
+                base_model=base_model,
+                models_to_merge=models_to_merge,
+                key=k,
+            )
             t0 = vecs_cpu[0]
 
-            # Standard checkpoints should have identical tensor shapes.
-            if any(v.shape != t0.shape for v in vecs_cpu):
-                raise ValueError(f"Shape mismatch for key: {k}")
-
             if _use_wudi_for_key(k, t0):
-                merged_tv[k] = self._optimize_wudi_vector(
+                merged_delta = self._optimize_wudi_vector(
                     vecs_cpu=vecs_cpu,
                     dev=dev,
                     iter_num=iter_num,
@@ -325,14 +352,14 @@ class MergingMethod:
                 # fallback for embeddings / norms / lm_head / 1D etc.
                 print(f'{k} is not optimized with WUDI and fallback to {fallback}')
                 if fallback == "zero":
-                    merged_tv[k] = torch.zeros_like(t0)
+                    merged_delta = torch.zeros_like(t0)
                 else:
-                    merged_tv[k] = self._task_arithmetic_fallback(vecs_cpu, fallback_scaling)
+                    merged_delta = self._task_arithmetic_fallback(vecs_cpu, fallback_scaling)
 
-        # scale the merged task vector and apply to base
-        merged_task_param = param({k: (scaling * v) for k, v in merged_tv.items()})
-        merged_param = base_model + merged_task_param
-        return merged_param
+            self._write_merged_key(base_model, k, merged_delta, scaling)
+            del vecs_cpu, merged_delta
+
+        return base_model
 
     @utils.args_inspector
     def sparsed_wudi_merge(
@@ -391,8 +418,6 @@ class MergingMethod:
             device = "cpu"
         dev = torch.device(device)
 
-        merged_tv = {}
-
         for k in tqdm.tqdm(base_keys, desc="Sparsed WUDI merge (per-key)"):
             if k not in tvs[0]:
                 raise ValueError(f"Missing key in task vectors: {k}")
@@ -406,7 +431,7 @@ class MergingMethod:
                 raise ValueError(f"Shape mismatch for key: {k}")
 
             if _use_wudi_for_key(k, t0):
-                merged_tv[k] = self._optimize_wudi_vector(
+                merged_delta = self._optimize_wudi_vector(
                     vecs_cpu=vecs_cpu,
                     dev=dev,
                     iter_num=iter_num,
@@ -424,14 +449,15 @@ class MergingMethod:
                 # fallback for embeddings / norms / lm_head / 1D etc.
                 print(f'{k} is not optimized with WUDI and fallback to {fallback}')
                 if fallback == "zero":
-                    merged_tv[k] = torch.zeros_like(t0)
+                    merged_delta = torch.zeros_like(t0)
                 else:
-                    merged_tv[k] = self._task_arithmetic_fallback(vecs_cpu, fallback_scaling)
+                    merged_delta = self._task_arithmetic_fallback(vecs_cpu, fallback_scaling)
 
-        # scale the merged task vector and apply to base
-        merged_task_param = param({k: (scaling * v) for k, v in merged_tv.items()})
-        merged_param = base_model + merged_task_param
-        return merged_param
+            self._write_merged_key(base_model, k, merged_delta, scaling)
+            del vecs_cpu, merged_delta
+
+        del tvs
+        return base_model
     
     @utils.args_inspector
     def selective_wudi_merge(
@@ -531,30 +557,22 @@ class MergingMethod:
                 return False
             return True
 
-        # task vectors: tv_i = ft_i - base
-        tvs = [m - base_model for m in models_to_merge]
-
         # choose device
         if device == "cuda" and not torch.cuda.is_available():
             device = "cpu"
         dev = torch.device(device)
 
-        merged_tv = {}
-
         for k in tqdm.tqdm(base_keys, desc="WUDI merge (per-key)"):
-            if k not in tvs[0]:
-                raise ValueError(f"Missing key in task vectors: {k}")
-
-            # gather per-task tensors (keep dtype consistent)
-            vecs_cpu = [tv[k] for tv in tvs]
+            # Build task vectors only for this key to avoid full-checkpoint deltas.
+            vecs_cpu = self._get_task_vectors_for_key(
+                base_model=base_model,
+                models_to_merge=models_to_merge,
+                key=k,
+            )
             t0 = vecs_cpu[0]
 
-            # Standard checkpoints should have identical tensor shapes.
-            if any(v.shape != t0.shape for v in vecs_cpu):
-                raise ValueError(f"Shape mismatch for key: {k}")
-
             if _use_wudi_for_key(k, t0):
-                merged_tv[k] = self._optimize_wudi_vector(
+                merged_delta = self._optimize_wudi_vector(
                     vecs_cpu=vecs_cpu,
                     dev=dev,
                     iter_num=iter_num,
@@ -572,24 +590,25 @@ class MergingMethod:
                 # fallback for embeddings / norms / lm_head / 1D etc.
                 print(f'{k} is not optimized with WUDI and fallback to {fallback}')
                 if fallback == "zero":
-                    merged_tv[k] = torch.zeros_like(t0)
+                    merged_delta = torch.zeros_like(t0)
                 else:
-                    merged_tv[k] = self._task_arithmetic_fallback(vecs_cpu, fallback_scaling)
+                    merged_delta = self._task_arithmetic_fallback(vecs_cpu, fallback_scaling)
 
-        # scale the merged task vector and apply to base
+            if use_lines_scaling:
+                if num_layers == 0:
+                    raise ValueError("Could not infer Llama layer count from model.layers.{idx} parameter names")
+                denom = num_layers - 1 if num_layers > 1 else 1
+                layer_scale = 1 / len(models_to_merge)
+                match = layer_pattern.match(k)
+                if match:
+                    layer = int(match.group(1))
+                    layer_scale = layer_scale + scaling * (layer / denom)
+                self._write_merged_key(base_model, k, merged_delta, layer_scale)
+            else:
+                self._write_merged_key(base_model, k, merged_delta, scaling)
+            del vecs_cpu, merged_delta
+
         if use_lines_scaling:
-            if num_layers == 0:
-                raise ValueError("Could not infer Llama layer count from model.layers.{idx} parameter names")
-            merged_tv = self._lines_scale_task_vector(
-                task_vector_dict=merged_tv,
-                alpha=1 / len(models_to_merge),
-                beta=scaling,
-                num_blocks=num_layers,
-                layer_pattern=layer_pattern,
-            )
-            merged_task_param = param(merged_tv)
-        else:
-            merged_task_param = param({k: (scaling * v) for k, v in merged_tv.items()})
-        merged_param = base_model + merged_task_param
-        return merged_param
+            print(f"LiNeS: The layers are scaled between {1 / len(models_to_merge)} to {1 / len(models_to_merge) + scaling}")
+        return base_model
     

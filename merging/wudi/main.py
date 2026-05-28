@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 import os
 import re
+import gc
 
 BASE = "meta-llama/Llama-3.2-3B"
 
@@ -122,6 +123,8 @@ def main():
     # 2) Wrap into param objects
     base_p = param(base_model)
     ft_ps = [param(m) for m in ft_models]
+    del ft_models
+    gc.collect()
 
     # 3) Filtering: excluded keys are removed from merging and keep base values.
     if args.effective_exclude:

@@ -26,10 +26,9 @@ pip install -r requirements.txt
 
 cd /workspace/wudi-merging-llama/nlp_roberta/llama
 python3 main.py \
- --out /workspace/outs/wudi \
+ --out /workspace/outs/wudi_warm_start \
  --merge_method wudi_merge \
- --wudi_variant wudi_last_14_layers\
- --scaling 1 \
+ --wudi_iter 50
  --wudi_device cuda \
  --exclude ".*embed.*" ".*lm_head.*"
 
