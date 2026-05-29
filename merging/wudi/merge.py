@@ -1,3 +1,5 @@
+import csv
+import os
 import torch
 import tqdm
 import re
@@ -5,6 +7,7 @@ import utils
 from param import param
 
 class MergingMethod:
+    WUDI_LOSS_STEPS = [0, 1, 2, 5, 10, 20, 50, 100, 200, 300]
 
     @utils.args_inspector
     def __init__(
@@ -29,7 +32,8 @@ class MergingMethod:
         eps: float,
         warm_start: bool = True,
         cfs_ridge: float = 1e-5,
-    ) -> torch.Tensor:
+        loss_steps: list = None,
+    ):
         if cfs_ridge < 0:
             raise ValueError(f"cfs_ridge must be >= 0, got {cfs_ridge}")
 
@@ -74,8 +78,10 @@ class MergingMethod:
             weight_decay=weight_decay,
         )
 
-        # Few-step Adam refinement
-        for _ in range(iter_num):
+        active_loss_steps = set(loss_steps or [])
+        losses = []
+
+        def _loss() -> torch.Tensor:
             disturbing = merging_vector.unsqueeze(0) - vectors_f
 
             # inner: (n_task, out, out)
@@ -84,15 +90,42 @@ class MergingMethod:
                 vectors_f.transpose(1, 2),
             )
 
-            loss = torch.sum(
+            return torch.sum(
                 (inner * inner) / l2_norms.view(-1, 1, 1)
             )
 
+        if 0 in active_loss_steps:
+            with torch.no_grad():
+                losses.append(float(_loss().detach().float().cpu().item()))
+
+        # Few-step Adam refinement
+        for step in range(1, iter_num + 1):
+            loss = _loss()
             opt.zero_grad(set_to_none=True)
             loss.backward()
             opt.step()
 
-        return merging_vector.detach().to(dtype=orig_dtype, device="cpu")
+            if step in active_loss_steps:
+                with torch.no_grad():
+                    losses.append(float(_loss().detach().float().cpu().item()))
+
+        return merging_vector.detach().to(dtype=orig_dtype, device="cpu"), losses
+
+    def _get_wudi_loss_steps(self, iter_num: int) -> list:
+        return [step for step in self.WUDI_LOSS_STEPS if step <= iter_num]
+
+    def _write_wudi_loss_csv(self, path: str, rows: list, loss_steps: list):
+        if not path or not rows:
+            return
+
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        fieldnames = ["key"] + [f"loss_{step}" for step in loss_steps]
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+
+        print(f"Saved WUDI loss log to: {path}")
 
     # def _optimize_wudi_vector(
     #     self,
@@ -275,6 +308,7 @@ class MergingMethod:
         eps: float = 1e-12,
         warm_start: bool = True,
         cfs_ridge: float = 1e-5,
+        loss_log_path: str = None,
         verbose: bool = True,
     ):
         """
@@ -295,6 +329,8 @@ class MergingMethod:
         if device == "cuda" and not torch.cuda.is_available():
             device = "cpu"
         dev = torch.device(device)
+        loss_steps = self._get_wudi_loss_steps(iter_num) if loss_log_path else []
+        loss_log_rows = []
 
         for k in tqdm.tqdm(base_keys, desc="WUDI merge (per-key)"):
             # Build task vectors only for this key to avoid full-checkpoint deltas.
@@ -306,7 +342,7 @@ class MergingMethod:
             t0 = vecs_cpu[0]
 
             if _use_wudi_for_key(k, t0):
-                merged_delta = self._optimize_wudi_vector(
+                merged_delta, losses = self._optimize_wudi_vector(
                     vecs_cpu=vecs_cpu,
                     dev=dev,
                     iter_num=iter_num,
@@ -315,7 +351,16 @@ class MergingMethod:
                     eps=eps,
                     warm_start=warm_start,
                     cfs_ridge=cfs_ridge,
+                    loss_steps=loss_steps,
                 )
+                if loss_log_path:
+                    loss_log_rows.append({
+                        "key": k,
+                        **{
+                            f"loss_{step}": loss
+                            for step, loss in zip(loss_steps, losses)
+                        },
+                    })
 
                 if verbose:
                      print(f'[INFO] {k} is optimized under WUDI')
@@ -331,6 +376,7 @@ class MergingMethod:
             self._write_merged_key(base_model, k, merged_delta, scaling)
             del vecs_cpu, merged_delta
 
+        self._write_wudi_loss_csv(loss_log_path, loss_log_rows, loss_steps)
         return base_model
 
     @utils.args_inspector
@@ -356,6 +402,7 @@ class MergingMethod:
         eps: float = 1e-12,
         warm_start: bool = True,
         cfs_ridge: float = 1e-5,
+        loss_log_path: str = None,
         verbose: bool = True,
     ):
         """
@@ -389,6 +436,8 @@ class MergingMethod:
         if device == "cuda" and not torch.cuda.is_available():
             device = "cpu"
         dev = torch.device(device)
+        loss_steps = self._get_wudi_loss_steps(iter_num) if loss_log_path else []
+        loss_log_rows = []
 
         for k in tqdm.tqdm(base_keys, desc="Sparsed WUDI merge (per-key)"):
             if k not in tvs[0]:
@@ -403,7 +452,7 @@ class MergingMethod:
                 raise ValueError(f"Shape mismatch for key: {k}")
 
             if _use_wudi_for_key(k, t0):
-                merged_delta = self._optimize_wudi_vector(
+                merged_delta, losses = self._optimize_wudi_vector(
                     vecs_cpu=vecs_cpu,
                     dev=dev,
                     iter_num=iter_num,
@@ -412,7 +461,16 @@ class MergingMethod:
                     eps=eps,
                     warm_start=warm_start,
                     cfs_ridge=cfs_ridge,
+                    loss_steps=loss_steps,
                 )
+                if loss_log_path:
+                    loss_log_rows.append({
+                        "key": k,
+                        **{
+                            f"loss_{step}": loss
+                            for step, loss in zip(loss_steps, losses)
+                        },
+                    })
 
                 if verbose:
                      print(f'[INFO] {k} is optimized under sparsed WUDI')
@@ -428,6 +486,7 @@ class MergingMethod:
             self._write_merged_key(base_model, k, merged_delta, scaling)
             del vecs_cpu, merged_delta
 
+        self._write_wudi_loss_csv(loss_log_path, loss_log_rows, loss_steps)
         del tvs
         return base_model
     
@@ -453,6 +512,7 @@ class MergingMethod:
         eps: float = 1e-12,
         warm_start: bool = True,
         cfs_ridge: float = 1e-5,
+        loss_log_path: str = None,
         verbose: bool = True,
     ):
         """
@@ -533,6 +593,8 @@ class MergingMethod:
         if device == "cuda" and not torch.cuda.is_available():
             device = "cpu"
         dev = torch.device(device)
+        loss_steps = self._get_wudi_loss_steps(iter_num) if loss_log_path else []
+        loss_log_rows = []
 
         for k in tqdm.tqdm(base_keys, desc="WUDI merge (per-key)"):
             # Build task vectors only for this key to avoid full-checkpoint deltas.
@@ -544,7 +606,7 @@ class MergingMethod:
             t0 = vecs_cpu[0]
 
             if _use_wudi_for_key(k, t0):
-                merged_delta = self._optimize_wudi_vector(
+                merged_delta, losses = self._optimize_wudi_vector(
                     vecs_cpu=vecs_cpu,
                     dev=dev,
                     iter_num=iter_num,
@@ -553,7 +615,16 @@ class MergingMethod:
                     eps=eps,
                     warm_start=warm_start,
                     cfs_ridge=cfs_ridge,
+                    loss_steps=loss_steps,
                 )
+                if loss_log_path:
+                    loss_log_rows.append({
+                        "key": k,
+                        **{
+                            f"loss_{step}": loss
+                            for step, loss in zip(loss_steps, losses)
+                        },
+                    })
 
                 if verbose:
                      print(f'[INFO] {k} is optimized under WUDI')
@@ -582,5 +653,6 @@ class MergingMethod:
 
         if use_lines_scaling:
             print(f"LiNeS: The layers are scaled between {1 / len(models_to_merge)} to {1 / len(models_to_merge) + scaling}")
+        self._write_wudi_loss_csv(loss_log_path, loss_log_rows, loss_steps)
         return base_model
     

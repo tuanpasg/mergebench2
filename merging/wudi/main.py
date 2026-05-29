@@ -103,6 +103,8 @@ def parse_args():
                     choices=["ties_sparsify", "dare_sparsify"],
                     default="ties_sparsify",
                     help="Sparsification variant for sparsed_wudi_merge")
+    ap.add_argument("--wudi_loss_log_csv", default=None,
+                    help="CSV path for WUDI loss logs. Default: <out>/wudi_loss_by_key.csv")
     return ap.parse_args()
 
 
@@ -146,6 +148,7 @@ def main():
     start = time.perf_counter()
     
     if args.merge_method in {"wudi_merge", "sparsed_wudi_merge", "selective_wudi_merge"}:
+        wudi_loss_log_csv = args.wudi_loss_log_csv or os.path.join(args.out, "wudi_loss_by_key.csv")
         merge_kwargs = {
             "base_model": base_p,
             "models_to_merge": ft_ps,
@@ -159,6 +162,7 @@ def main():
             "fallback": args.wudi_fallback,
             "fallback_scaling": args.wudi_fallback_scaling,
             "eps": 1e-12,
+            "loss_log_path": wudi_loss_log_csv,
             "verbose": True,
         }
         if args.merge_method == "sparsed_wudi_merge":

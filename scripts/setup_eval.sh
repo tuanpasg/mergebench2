@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e  # exit on first error
-
+export PIP_CACHE_DIR=/workspace/.cache/pip
 # Conda note:
 # In non-interactive bash scripts, `conda` commands may fail until conda.sh is sourced.
 
