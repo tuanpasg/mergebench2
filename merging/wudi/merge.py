@@ -53,6 +53,22 @@ class MergingMethod:
 
         weights = 1.0 / l2_norms  # (n_task,)
 
+        cold_init = vectors_f.sum(dim=0)
+
+        def _wudi_objective(candidate: torch.Tensor) -> torch.Tensor:
+            disturbing = candidate.unsqueeze(0) - vectors_f
+
+            # inner: (n_task, out, out)
+            inner = torch.matmul(
+                disturbing,
+                vectors_f.transpose(1, 2),
+            )
+
+            return torch.sum(
+                (inner * inner) / l2_norms.view(-1, 1, 1)
+            )
+
+        init_delta = cold_init
         if warm_start:
             A = torch.zeros((in_dim, in_dim), device=dev, dtype=torch.float32)
             B = torch.zeros((out_dim, in_dim), device=dev, dtype=torch.float32)
@@ -67,10 +83,24 @@ class MergingMethod:
 
             A = A + cfs_ridge * torch.eye(in_dim, device=dev, dtype=torch.float32)
 
-            init_delta = torch.linalg.solve(A.T, B.T).T
-            merging_vector = torch.nn.Parameter(init_delta.to(dtype=orig_dtype))
-        else:
-            merging_vector = torch.nn.Parameter(vectors_f.sum(dim=0))
+            try:
+                warm_init = torch.linalg.solve(A.T, B.T).T.to(dtype=orig_dtype)
+                with torch.no_grad():
+                    cold_loss = _wudi_objective(cold_init).detach().float()
+                    warm_loss = _wudi_objective(warm_init).detach().float()
+
+                if bool(torch.isfinite(warm_loss).item()) and bool((warm_loss <= cold_loss).item()):
+                    init_delta = warm_init
+                else:
+                    print(
+                        "[INFO] WUDI warm_init neglected; falling back to cold_init "
+                        f"(cold_loss={cold_loss.item()}, warm_loss={warm_loss.item()})"
+                    )
+            except RuntimeError:
+                print("[INFO] WUDI warm_init neglected; falling back to cold_init (CFS solve failed)")
+                init_delta = cold_init
+
+        merging_vector = torch.nn.Parameter(init_delta.to(dtype=orig_dtype))
 
         opt = torch.optim.Adam(
             [merging_vector],
@@ -82,17 +112,7 @@ class MergingMethod:
         losses = []
 
         def _loss() -> torch.Tensor:
-            disturbing = merging_vector.unsqueeze(0) - vectors_f
-
-            # inner: (n_task, out, out)
-            inner = torch.matmul(
-                disturbing,
-                vectors_f.transpose(1, 2),
-            )
-
-            return torch.sum(
-                (inner * inner) / l2_norms.view(-1, 1, 1)
-            )
+            return _wudi_objective(merging_vector)
 
         if 0 in active_loss_steps:
             with torch.no_grad():
