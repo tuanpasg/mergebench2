@@ -6,5 +6,7 @@ transformers
 accelerate 
 tqdm
 pandas
+openpyxl
 tabulate
 datasets
+matplotlib

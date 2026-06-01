@@ -28,6 +28,7 @@ cd /workspace/wudi-merging-llama/nlp_roberta/llama
 python3 main.py \
  --out /workspace/outs/wudi_warm_start_200 \
  --merge_method wudi_merge \
+ --wudi_warm_start \
  --wudi_iter 200 \
  --wudi_device cuda \
  --exclude ".*embed.*" ".*lm_head.*"
@@ -35,7 +36,6 @@ python3 main.py \
 python3 main.py \
  --out /workspace/outs/wudi_cold_start_200 \
  --merge_method wudi_merge \
- --no_wudi_warm_start \
  --wudi_iter 200 \
  --wudi_device cuda \
  --exclude ".*embed.*" ".*lm_head.*"
@@ -43,7 +43,6 @@ python3 main.py \
 python3 main.py \
  --out /workspace/outs/wudi_test \
  --merge_method wudi_merge \
- --no_wudi_warm_start \
  --wudi_device cuda \
  --exclude ".*embed.*" ".*lm_head.*"
 
@@ -66,7 +65,6 @@ python3 main.py \
   python3 main.py \
  --out /workspace/outs/wudi_sparsed_dare_0.9 \
  --merge_method sparsed_wudi_merge \
- --no_wudi_warm_start \
  --wudi_sparsify_variant dare_sparsify \
  --wudi_K 0.9 \
  --scaling 1 \

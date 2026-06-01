@@ -4,6 +4,7 @@ import torch
 import tqdm
 import re
 import utils
+from openpyxl import Workbook
 from param import param
 
 class MergingMethod:
@@ -145,7 +146,17 @@ class MergingMethod:
             writer.writeheader()
             writer.writerows(rows)
 
+        xlsx_path = os.path.splitext(path)[0] + ".xlsx"
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet.title = "WUDI loss"
+        worksheet.append(fieldnames)
+        for row in rows:
+            worksheet.append([row.get(fieldname) for fieldname in fieldnames])
+        workbook.save(xlsx_path)
+
         print(f"Saved WUDI loss log to: {path}")
+        print(f"Saved WUDI loss log to: {xlsx_path}")
 
     # def _optimize_wudi_vector(
     #     self,

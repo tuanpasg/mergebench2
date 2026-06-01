@@ -12,12 +12,12 @@ import os
 import re
 import gc
 
-BASE = "meta-llama/Llama-3.2-3B"
+BASE = "google/gemma-2-2b"
 
 FT_MODELS = [
-    ("instruction", "MergeBench/Llama-3.2-3B_instruction"),
-    ("math",        "MergeBench/Llama-3.2-3B_math"),
-    ("coding",      "MergeBench/Llama-3.2-3B_coding"),
+    ("instruction", "MergeBench/gemma-2-2b_instruction"),
+    ("math",        "MergeBench/gemma-2-2b_math"),
+    ("coding",      "MergeBench/gemma-2-2b_coding"),
 ]
 
 DEFAULT_EXCLUDE = [
@@ -42,7 +42,7 @@ def write_merge_readme(save_path: str, args: Any, ft_ckpts: List[str], runtime_s
     args_dict = vars(args) if hasattr(args, "__dict__") else dict(args)
     content = [
         "# Merged Model",
-        f"- Base model: `{args_dict.get('base_model', 'N/A')}`",
+        f"- Base model: {BASE}",
         f"- Algorithm: `{args_dict.get('merge_method', args_dict.get('algo', 'N/A'))}`",
         f"- Save path: `{save_path}`",
         f"- Fine-tuned checkpoints: {ft_ckpts}",
@@ -91,7 +91,7 @@ def parse_args():
     ap.add_argument("--wudi_device", default="cuda", help="cuda recommended; cpu will be very slow")
     ap.add_argument("--wudi_warm_start", action="store_true",
                     help="Enable closed-form warm start for WUDI optimization")
-    ap.add_argument("--wudi_cfs_ridge", type=float, default=1e-5,
+    ap.add_argument("--wudi_cfs_ridge", type=float, default=0.0,
                     help="Ridge regularization used by WUDI closed-form warm start")
     ap.add_argument("--wudi_fallback", choices=["task_arithmetic", "zero"], default="task_arithmetic",
                     help="How to merge keys not optimized by WUDI")
