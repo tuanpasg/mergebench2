@@ -28,6 +28,12 @@ CONVERGENCE_RATIO = 0.95
 
 def load_and_enrich(path: Path, mode: str) -> pd.DataFrame:
     df = pd.read_csv(path)
+    if {"key", "step", "loss", "gradient_norm"}.issubset(df.columns):
+        df = (
+            df.pivot(index="key", columns="step", values="loss")
+            .rename(columns=lambda step: f"loss_{step}")
+            .reset_index()
+        )
     df["mode"] = mode
 
     df["layer"] = df["key"].str.extract(r"model\.layers\.(\d+)\.").astype(int)

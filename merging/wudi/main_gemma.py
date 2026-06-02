@@ -104,7 +104,7 @@ def parse_args():
                     default="ties_sparsify",
                     help="Sparsification variant for sparsed_wudi_merge")
     ap.add_argument("--wudi_loss_log_csv", default=None,
-                    help="CSV path for WUDI loss logs. Default: <out>/wudi_loss_by_key.csv")
+                    help="CSV path for WUDI metric logs. Default: <out>/wudi_loss_by_key.csv")
     return ap.parse_args()
 
 

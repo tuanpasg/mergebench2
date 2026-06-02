@@ -8,7 +8,7 @@ from openpyxl import Workbook
 from param import param
 
 class MergingMethod:
-    WUDI_LOSS_STEPS = [0, 1, 2, 5, 10, 20, 50, 100, 200, 300]
+    WUDI_LOSS_STEPS = list(range(100))
 
     @utils.args_inspector
     def __init__(
@@ -110,14 +110,23 @@ class MergingMethod:
         )
 
         active_loss_steps = set(loss_steps or [])
-        losses = []
+        metrics = []
 
         def _loss() -> torch.Tensor:
             return _wudi_objective(merging_vector)
 
+        def _measure_loss_and_gradient_norm(step: int):
+            opt.zero_grad(set_to_none=True)
+            loss = _loss()
+            loss.backward()
+            metrics.append({
+                "step": step,
+                "loss": float(loss.detach().float().cpu().item()),
+                "gradient_norm": float(merging_vector.grad.detach().float().norm(p=2).cpu().item()),
+            })
+
         if 0 in active_loss_steps:
-            with torch.no_grad():
-                losses.append(float(_loss().detach().float().cpu().item()))
+            _measure_loss_and_gradient_norm(step=0)
 
         # Few-step Adam refinement
         for step in range(1, iter_num + 1):
@@ -127,20 +136,19 @@ class MergingMethod:
             opt.step()
 
             if step in active_loss_steps:
-                with torch.no_grad():
-                    losses.append(float(_loss().detach().float().cpu().item()))
+                _measure_loss_and_gradient_norm(step=step)
 
-        return merging_vector.detach().to(dtype=orig_dtype, device="cpu"), losses
+        return merging_vector.detach().to(dtype=orig_dtype, device="cpu"), metrics
 
     def _get_wudi_loss_steps(self, iter_num: int) -> list:
         return [step for step in self.WUDI_LOSS_STEPS if step <= iter_num]
 
-    def _write_wudi_loss_csv(self, path: str, rows: list, loss_steps: list):
+    def _write_wudi_loss_csv(self, path: str, rows: list):
         if not path or not rows:
             return
 
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        fieldnames = ["key"] + [f"loss_{step}" for step in loss_steps]
+        fieldnames = ["key", "step", "loss", "gradient_norm"]
         with open(path, "w", encoding="utf-8", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
@@ -149,7 +157,7 @@ class MergingMethod:
         xlsx_path = os.path.splitext(path)[0] + ".xlsx"
         workbook = Workbook()
         worksheet = workbook.active
-        worksheet.title = "WUDI loss"
+        worksheet.title = "WUDI metrics"
         worksheet.append(fieldnames)
         for row in rows:
             worksheet.append([row.get(fieldname) for fieldname in fieldnames])
@@ -373,7 +381,7 @@ class MergingMethod:
             t0 = vecs_cpu[0]
 
             if _use_wudi_for_key(k, t0):
-                merged_delta, losses = self._optimize_wudi_vector(
+                merged_delta, metrics = self._optimize_wudi_vector(
                     vecs_cpu=vecs_cpu,
                     dev=dev,
                     iter_num=iter_num,
@@ -385,13 +393,10 @@ class MergingMethod:
                     loss_steps=loss_steps,
                 )
                 if loss_log_path:
-                    loss_log_rows.append({
+                    loss_log_rows.extend({
                         "key": k,
-                        **{
-                            f"loss_{step}": loss
-                            for step, loss in zip(loss_steps, losses)
-                        },
-                    })
+                        **metric,
+                    } for metric in metrics)
 
                 if verbose:
                      print(f'[INFO] {k} is optimized under WUDI')
@@ -407,7 +412,7 @@ class MergingMethod:
             self._write_merged_key(base_model, k, merged_delta, scaling)
             del vecs_cpu, merged_delta
 
-        self._write_wudi_loss_csv(loss_log_path, loss_log_rows, loss_steps)
+        self._write_wudi_loss_csv(loss_log_path, loss_log_rows)
         return base_model
 
     @utils.args_inspector
@@ -483,7 +488,7 @@ class MergingMethod:
                 raise ValueError(f"Shape mismatch for key: {k}")
 
             if _use_wudi_for_key(k, t0):
-                merged_delta, losses = self._optimize_wudi_vector(
+                merged_delta, metrics = self._optimize_wudi_vector(
                     vecs_cpu=vecs_cpu,
                     dev=dev,
                     iter_num=iter_num,
@@ -495,13 +500,10 @@ class MergingMethod:
                     loss_steps=loss_steps,
                 )
                 if loss_log_path:
-                    loss_log_rows.append({
+                    loss_log_rows.extend({
                         "key": k,
-                        **{
-                            f"loss_{step}": loss
-                            for step, loss in zip(loss_steps, losses)
-                        },
-                    })
+                        **metric,
+                    } for metric in metrics)
 
                 if verbose:
                      print(f'[INFO] {k} is optimized under sparsed WUDI')
@@ -517,7 +519,7 @@ class MergingMethod:
             self._write_merged_key(base_model, k, merged_delta, scaling)
             del vecs_cpu, merged_delta
 
-        self._write_wudi_loss_csv(loss_log_path, loss_log_rows, loss_steps)
+        self._write_wudi_loss_csv(loss_log_path, loss_log_rows)
         del tvs
         return base_model
     
@@ -637,7 +639,7 @@ class MergingMethod:
             t0 = vecs_cpu[0]
 
             if _use_wudi_for_key(k, t0):
-                merged_delta, losses = self._optimize_wudi_vector(
+                merged_delta, metrics = self._optimize_wudi_vector(
                     vecs_cpu=vecs_cpu,
                     dev=dev,
                     iter_num=iter_num,
@@ -649,13 +651,10 @@ class MergingMethod:
                     loss_steps=loss_steps,
                 )
                 if loss_log_path:
-                    loss_log_rows.append({
+                    loss_log_rows.extend({
                         "key": k,
-                        **{
-                            f"loss_{step}": loss
-                            for step, loss in zip(loss_steps, losses)
-                        },
-                    })
+                        **metric,
+                    } for metric in metrics)
 
                 if verbose:
                      print(f'[INFO] {k} is optimized under WUDI')
@@ -684,6 +683,6 @@ class MergingMethod:
 
         if use_lines_scaling:
             print(f"LiNeS: The layers are scaled between {1 / len(models_to_merge)} to {1 / len(models_to_merge) + scaling}")
-        self._write_wudi_loss_csv(loss_log_path, loss_log_rows, loss_steps)
+        self._write_wudi_loss_csv(loss_log_path, loss_log_rows)
         return base_model
     
