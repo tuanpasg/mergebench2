@@ -1,4 +1,6 @@
 import csv
+import json
+import math
 import os
 import torch
 import tqdm
@@ -8,8 +10,6 @@ from openpyxl import Workbook
 from param import param
 
 class MergingMethod:
-    WUDI_LOSS_STEPS = list(range(100))
-
     @utils.args_inspector
     def __init__(
         self, 
@@ -71,6 +71,7 @@ class MergingMethod:
 
         init_delta = cold_init
         if warm_start:
+            identity = torch.eye(in_dim, device=dev, dtype=torch.float32)
             A = torch.zeros((in_dim, in_dim), device=dev, dtype=torch.float32)
             B = torch.zeros((out_dim, in_dim), device=dev, dtype=torch.float32)
 
@@ -79,10 +80,9 @@ class MergingMethod:
                 w = weights[i].float()
 
                 vt_v = v.T @ v
-                A += w * vt_v
-                B += w * (v @ vt_v)
-
-            A = A + cfs_ridge * torch.eye(in_dim, device=dev, dtype=torch.float32)
+                regularized_gram = vt_v + cfs_ridge * identity
+                A += w * regularized_gram
+                B += w * (v @ regularized_gram)
 
             try:
                 warm_init = torch.linalg.solve(A.T, B.T).T.to(dtype=orig_dtype)
@@ -117,12 +117,62 @@ class MergingMethod:
 
         def _measure_loss_and_gradient_norm(step: int):
             opt.zero_grad(set_to_none=True)
-            loss = _loss()
+
+            # ── per-task losses (exact decomposition, no extra forward pass) ──
+            disturbing = merging_vector.unsqueeze(0) - vectors_f          # (n_task, out, in)
+            inner = torch.matmul(disturbing, vectors_f.transpose(1, 2))   # (n_task, out, out)
+            per_task_losses = (
+                (inner * inner).sum(dim=(1, 2)) / l2_norms               # (n_task,)
+            )
+
+            loss = per_task_losses.sum()
+
+            # ── per-task gradients via autograd ──
+            # Re-compute individually to get isolated gradients per task
+            per_task_grads = []
+            for k in range(n_task):
+                grad = torch.autograd.grad(
+                    per_task_losses[k],
+                    merging_vector,
+                    retain_graph=True,
+                )[0]
+                per_task_grads.append(
+                    grad.detach().float().clone()
+                )
+
+            # ── gradient alignment (pairwise cosine similarity) ──
+            flat_grads = torch.stack([g.reshape(-1) for g in per_task_grads])  # (n_task, d)
+            norms = flat_grads.norm(dim=1, keepdim=True).clamp(min=1e-12)
+            normed = flat_grads / norms
+            cos_sim_matrix = normed @ normed.T                                  # (n_task, n_task)
+            if n_task > 1:
+                mask = torch.triu(
+                    torch.ones(n_task, n_task, device=dev, dtype=torch.bool),
+                    diagonal=1,
+                )
+                mean_alignment = cos_sim_matrix[mask].mean().item()
+            else:
+                mean_alignment = float("nan")
+
+            # ── per-task loss variance ──
+            task_loss_vals = per_task_losses.detach().float()
+            loss_variance = task_loss_vals.var(unbiased=False).item()
+
+            # ── aggregate gradient norm (restore for optimizer) ──
+            opt.zero_grad(set_to_none=True)
+            loss = per_task_losses.sum()
             loss.backward()
+            agg_grad_norm = merging_vector.grad.detach().float().norm(p=2).item()
+
             metrics.append({
                 "step": step,
                 "loss": float(loss.detach().float().cpu().item()),
-                "gradient_norm": float(merging_vector.grad.detach().float().norm(p=2).cpu().item()),
+                "gradient_norm": agg_grad_norm,
+                # ── new fields ──
+                "per_task_losses": per_task_losses.detach().float().cpu().tolist(),
+                "loss_variance": loss_variance,
+                "mean_gradient_alignment": mean_alignment,
+                "cos_sim_matrix": cos_sim_matrix.detach().cpu().tolist(),
             })
 
         if 0 in active_loss_steps:
@@ -140,26 +190,46 @@ class MergingMethod:
 
         return merging_vector.detach().to(dtype=orig_dtype, device="cpu"), metrics
 
-    def _get_wudi_loss_steps(self, iter_num: int) -> list:
-        return [step for step in self.WUDI_LOSS_STEPS if step <= iter_num]
-
     def _write_wudi_loss_csv(self, path: str, rows: list):
         if not path or not rows:
             return
 
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        fieldnames = ["key", "step", "loss", "gradient_norm"]
+        required_fields = ["key", "step", "loss", "gradient_norm"]
+        extra_fields = sorted({
+            field
+            for row in rows
+            for field in row
+            if field not in required_fields
+        })
+        fieldnames = required_fields + extra_fields
+
+        def _serialize_value(value):
+            if isinstance(value, (list, tuple, dict)):
+                return json.dumps(value)
+            if isinstance(value, float) and not math.isfinite(value):
+                return str(value)
+            return value
+
+        serialized_rows = [
+            {
+                fieldname: _serialize_value(row.get(fieldname))
+                for fieldname in fieldnames
+            }
+            for row in rows
+        ]
+
         with open(path, "w", encoding="utf-8", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
-            writer.writerows(rows)
+            writer.writerows(serialized_rows)
 
         xlsx_path = os.path.splitext(path)[0] + ".xlsx"
         workbook = Workbook()
         worksheet = workbook.active
         worksheet.title = "WUDI metrics"
         worksheet.append(fieldnames)
-        for row in rows:
+        for row in serialized_rows:
             worksheet.append([row.get(fieldname) for fieldname in fieldnames])
         workbook.save(xlsx_path)
 
@@ -368,7 +438,7 @@ class MergingMethod:
         if device == "cuda" and not torch.cuda.is_available():
             device = "cpu"
         dev = torch.device(device)
-        loss_steps = self._get_wudi_loss_steps(iter_num) if loss_log_path else []
+        loss_steps = list(range(iter_num)) if loss_log_path else []
         loss_log_rows = []
 
         for k in tqdm.tqdm(base_keys, desc="WUDI merge (per-key)"):
@@ -392,7 +462,7 @@ class MergingMethod:
                     cfs_ridge=cfs_ridge,
                     loss_steps=loss_steps,
                 )
-                if loss_log_path:
+                if loss_log_path and metrics:
                     loss_log_rows.extend({
                         "key": k,
                         **metric,
@@ -472,7 +542,7 @@ class MergingMethod:
         if device == "cuda" and not torch.cuda.is_available():
             device = "cpu"
         dev = torch.device(device)
-        loss_steps = self._get_wudi_loss_steps(iter_num) if loss_log_path else []
+        loss_steps = list(range(iter_num)) if loss_log_path else []
         loss_log_rows = []
 
         for k in tqdm.tqdm(base_keys, desc="Sparsed WUDI merge (per-key)"):
@@ -499,7 +569,7 @@ class MergingMethod:
                     cfs_ridge=cfs_ridge,
                     loss_steps=loss_steps,
                 )
-                if loss_log_path:
+                if loss_log_path and metrics:
                     loss_log_rows.extend({
                         "key": k,
                         **metric,
@@ -626,7 +696,7 @@ class MergingMethod:
         if device == "cuda" and not torch.cuda.is_available():
             device = "cpu"
         dev = torch.device(device)
-        loss_steps = self._get_wudi_loss_steps(iter_num) if loss_log_path else []
+        loss_steps = list(range(iter_num)) if loss_log_path else []
         loss_log_rows = []
 
         for k in tqdm.tqdm(base_keys, desc="WUDI merge (per-key)"):
@@ -650,7 +720,7 @@ class MergingMethod:
                     cfs_ridge=cfs_ridge,
                     loss_steps=loss_steps,
                 )
-                if loss_log_path:
+                if loss_log_path and metrics:
                     loss_log_rows.extend({
                         "key": k,
                         **metric,
