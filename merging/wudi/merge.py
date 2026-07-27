@@ -35,6 +35,8 @@ class MergingMethod:
         cfs_ridge: float = 1e-5,
         loss_steps: list = None,
     ):
+        metrics = []
+
         if cfs_ridge < 0:
             raise ValueError(f"cfs_ridge must be >= 0, got {cfs_ridge}")
 
@@ -93,13 +95,17 @@ class MergingMethod:
                 if bool(torch.isfinite(warm_loss).item()) and bool((warm_loss <= cold_loss).item()):
                     init_delta = warm_init
                 else:
+                    init_delta = warm_init
                     print(
-                        "[INFO] WUDI warm_init neglected; falling back to cold_init "
+                        "       [WARMING] WUDI warm_init neglected; falling back to cold_init "
                         f"(cold_loss={cold_loss.item()}, warm_loss={warm_loss.item()})"
                     )
             except RuntimeError:
-                print("[INFO] WUDI warm_init neglected; falling back to cold_init (CFS solve failed)")
+                print("     [WARNING] WUDI warm_init neglected; falling back to cold_init (CFS solve failed)")
                 init_delta = cold_init
+
+            merging_vector = torch.nn.Parameter(init_delta.to(dtype=orig_dtype))
+            return merging_vector.detach().to(dtype=orig_dtype, device="cpu"), metrics
 
         merging_vector = torch.nn.Parameter(init_delta.to(dtype=orig_dtype))
 
@@ -110,7 +116,6 @@ class MergingMethod:
         )
 
         active_loss_steps = set(loss_steps or [])
-        metrics = []
 
         def _loss() -> torch.Tensor:
             return _wudi_objective(merging_vector)

@@ -110,6 +110,14 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Where to cache task-vector tensors. Default: <outdir>/delta_cache",
     )
+    p.add_argument(
+        "--disable-cache",
+        action="store_true",
+        help=(
+            "Do not write task-vector tensors to disk. Selected finetune and merged "
+            "deltas are retained in CPU RAM instead, which may use substantially more memory."
+        ),
+    )
     return p.parse_args()
 
 
@@ -274,6 +282,46 @@ def cache_merged_task_vectors(
     return key_to_path
 
 
+def build_task_vectors_in_memory(
+    args: argparse.Namespace,
+    base_sd: Dict[str, torch.Tensor],
+    keys: List[str],
+) -> Dict[str, List[torch.Tensor]]:
+    """Sequentially load finetunes and retain selected deltas in CPU RAM."""
+    key_to_tvs: Dict[str, List[torch.Tensor]] = {k: [] for k in keys}
+    dtype = dtype_from_str(args.dtype)
+
+    for task_id, ft in enumerate(args.finetunes):
+        print(f"Loading finetune {task_id}: {ft}")
+        ft_sd = load_model_state(ft, dtype=dtype)
+        for k in tqdm(keys, desc=f"Building in-memory deltas for task {task_id}"):
+            if k not in ft_sd:
+                raise KeyError(f"Key {k} missing in finetune {ft}")
+            if ft_sd[k].shape != base_sd[k].shape:
+                raise ValueError(f"Shape mismatch for {k}: base={base_sd[k].shape}, ft={ft_sd[k].shape}")
+            key_to_tvs[k].append((ft_sd[k].float() - base_sd[k].float()).to(torch.float16))
+        del ft_sd
+        gc.collect()
+
+    return key_to_tvs
+
+
+def build_merged_task_vectors_in_memory(
+    merged_sd: Dict[str, torch.Tensor],
+    base_sd: Dict[str, torch.Tensor],
+    keys: List[str],
+) -> Dict[str, torch.Tensor]:
+    """Build selected merged-model task vectors and retain them in CPU RAM."""
+    key_to_tv = {}
+    for k in tqdm(keys, desc="Building in-memory merged task vectors"):
+        if k not in merged_sd:
+            raise KeyError(f"Key {k} missing in merged checkpoint")
+        if merged_sd[k].shape != base_sd[k].shape:
+            raise ValueError(f"Shape mismatch for {k}: base={base_sd[k].shape}, merged={merged_sd[k].shape}")
+        key_to_tv[k] = (merged_sd[k].float() - base_sd[k].float()).to(torch.float16)
+    return key_to_tv
+
+
 def main() -> None:
     args = parse_args()
     os.makedirs(args.outdir, exist_ok=True)
@@ -303,6 +351,7 @@ def main() -> None:
         "exclude": args.exclude,
         "layer_reduce": args.layer_reduce,
         "chunk_rows": args.chunk_rows,
+        "cache_disabled": args.disable_cache,
     }
     with open(os.path.join(args.outdir, "metadata.json"), "w") as f:
         json.dump(metadata, f, indent=2)
@@ -310,13 +359,23 @@ def main() -> None:
     if args.merged:
         print(f"Loading merged checkpoint for tau_m: {args.merged}")
         merged_sd = load_model_state(args.merged, dtype=dtype)
-        key_to_merged_path = cache_merged_task_vectors(args, merged_sd, base_sd, keys)
+        if args.disable_cache:
+            key_to_merged_tvs = build_merged_task_vectors_in_memory(merged_sd, base_sd, keys)
+            key_to_merged_path = None
+        else:
+            key_to_merged_path = cache_merged_task_vectors(args, merged_sd, base_sd, keys)
+            key_to_merged_tvs = None
         del merged_sd
         gc.collect()
     else:
         key_to_merged_path = None
+        key_to_merged_tvs = None
 
-    if args.load_all_finetunes:
+    if args.disable_cache:
+        print("Disk caching disabled; retaining selected task vectors in CPU RAM.")
+        key_to_tvs = build_task_vectors_in_memory(args, base_sd, keys)
+        key_to_paths = None
+    elif args.load_all_finetunes:
         print("Loading all finetunes into RAM. This is faster but memory-heavy.")
         ft_sds = [load_model_state(ft, dtype=dtype) for ft in args.finetunes]
         key_to_tvs = {}
@@ -337,7 +396,12 @@ def main() -> None:
             assert key_to_paths is not None
             tvs = [torch.load(p, map_location="cpu") for p in key_to_paths[k]]
 
-        tau_m = torch.load(key_to_merged_path[k], map_location="cpu") if key_to_merged_path is not None else None
+        if key_to_merged_tvs is not None:
+            tau_m = key_to_merged_tvs[k]
+        elif key_to_merged_path is not None:
+            tau_m = torch.load(key_to_merged_path[k], map_location="cpu")
+        else:
+            tau_m = None
         raw, per_param = compute_s_key(tvs, device=device, chunk_rows=args.chunk_rows, tau_m=tau_m)
         module_family = get_module_family(k)
         if module_family == "unknown":

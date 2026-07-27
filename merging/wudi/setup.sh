@@ -25,6 +25,17 @@ pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https
 pip install -r requirements.txt
 
 cd /workspace/wudi-merging-llama/nlp_roberta/llama
+
+# truly close-form solution wudi
+python3 main.py \
+ --out /workspace/outs/wudi_cfs_e_7\
+ --merge_method wudi_merge \
+ --wudi_warm_start \
+ --wudi_iter 0 \
+ --wudi_cfs_ridge 1e-7\
+ --wudi_device cuda \
+ --exclude ".*embed.*" ".*lm_head.*"
+
 python3 main.py \
  --out /workspace/outs/wudi_warm_start_200 \
  --merge_method wudi_merge \
@@ -34,9 +45,9 @@ python3 main.py \
  --exclude ".*embed.*" ".*lm_head.*"
 
 python3 main.py \
- --out /workspace/outs/wudi_cold_start_200 \
+ --out /workspace/outs/wudi_cold_start_300 \
  --merge_method wudi_merge \
- --wudi_iter 200 \
+ --wudi_iter 300 \
  --wudi_device cuda \
  --exclude ".*embed.*" ".*lm_head.*"
 
