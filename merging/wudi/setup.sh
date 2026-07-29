@@ -44,10 +44,21 @@ python3 main.py \
  --wudi_device cuda \
  --exclude ".*embed.*" ".*lm_head.*"
 
+# ADAM-WUDI 
 python3 main.py \
- --out /workspace/outs/wudi_cold_start_300 \
+ --out /workspace/outs/wudi_300 \
  --merge_method wudi_merge \
  --wudi_iter 300 \
+ --wudi_device cuda \
+ --exclude ".*embed.*" ".*lm_head.*"
+
+# NEW ADAM_WUDI
+python3 main.py \
+ --out /workspace/outs/wudi_15 \
+ --merge_method wudi_merge \
+ --wudi_iter 15 \
+ --wudi_alpha 0.1 \
+ --wudi_weight_decay 0.0 \
  --wudi_device cuda \
  --exclude ".*embed.*" ".*lm_head.*"
 

@@ -88,6 +88,8 @@ def parse_args():
     ap.add_argument("--wudi_iter", type=int, default=200)
     ap.add_argument("--wudi_lr", type=float, default=1e-5)
     ap.add_argument("--wudi_weight_decay", type=float, default=0.0)
+    ap.add_argument("--wudi_alpha", "--alpha", dest="wudi_alpha", type=float, default=0.0,
+                    help="Strength of the WUDI proximal penalty around the cold initialization")
     ap.add_argument("--wudi_device", default="cuda", help="cuda recommended; cpu will be very slow")
     ap.add_argument("--wudi_warm_start", action="store_true",
                     help="Enable closed-form warm start for WUDI optimization")
@@ -156,6 +158,7 @@ def main():
             "iter_num": args.wudi_iter,
             "lr": args.wudi_lr,
             "weight_decay": args.wudi_weight_decay,
+            "alpha": args.wudi_alpha,
             "device": args.wudi_device,
             "warm_start": args.wudi_warm_start,
             "cfs_ridge": args.wudi_cfs_ridge,

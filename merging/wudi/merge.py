@@ -31,14 +31,16 @@ class MergingMethod:
         lr: float,
         weight_decay: float,
         eps: float,
+        alpha: float = 0.0,
         warm_start: bool = True,
         cfs_ridge: float = 1e-5,
         loss_steps: list = None,
     ):
         metrics = []
-
         if cfs_ridge < 0:
             raise ValueError(f"cfs_ridge must be >= 0, got {cfs_ridge}")
+        if alpha < 0:
+            raise ValueError(f"alpha must be >= 0, got {alpha}")
 
         # stack on device: (n_task, out, in)
         vectors = torch.stack([v.to(dev) for v in vecs_cpu], dim=0)
@@ -57,6 +59,8 @@ class MergingMethod:
         weights = 1.0 / l2_norms  # (n_task,)
 
         cold_init = vectors_f.sum(dim=0)
+        anchor = cold_init.detach()
+        lambda_layer = alpha * n_task / in_dim
 
         def _wudi_objective(candidate: torch.Tensor) -> torch.Tensor:
             disturbing = candidate.unsqueeze(0) - vectors_f
@@ -67,12 +71,17 @@ class MergingMethod:
                 vectors_f.transpose(1, 2),
             )
 
-            return torch.sum(
+            wudi_loss = torch.sum(
                 (inner * inner) / l2_norms.view(-1, 1, 1)
             )
+            prox_loss = lambda_layer * torch.sum(
+                (candidate - anchor) ** 2
+            )
+            return wudi_loss + prox_loss
 
         init_delta = cold_init
         if warm_start:
+            # Path CFS Only
             identity = torch.eye(in_dim, device=dev, dtype=torch.float32)
             A = torch.zeros((in_dim, in_dim), device=dev, dtype=torch.float32)
             B = torch.zeros((out_dim, in_dim), device=dev, dtype=torch.float32)
@@ -97,7 +106,7 @@ class MergingMethod:
                 else:
                     init_delta = warm_init
                     print(
-                        "       [WARMING] WUDI warm_init neglected; falling back to cold_init "
+                        "       [WARMING] loss warm_init > cold_init "
                         f"(cold_loss={cold_loss.item()}, warm_loss={warm_loss.item()})"
                     )
             except RuntimeError:
@@ -117,9 +126,6 @@ class MergingMethod:
 
         active_loss_steps = set(loss_steps or [])
 
-        def _loss() -> torch.Tensor:
-            return _wudi_objective(merging_vector)
-
         def _measure_loss_and_gradient_norm(step: int):
             opt.zero_grad(set_to_none=True)
 
@@ -129,8 +135,6 @@ class MergingMethod:
             per_task_losses = (
                 (inner * inner).sum(dim=(1, 2)) / l2_norms               # (n_task,)
             )
-
-            loss = per_task_losses.sum()
 
             # ── per-task gradients via autograd ──
             # Re-compute individually to get isolated gradients per task
@@ -165,7 +169,7 @@ class MergingMethod:
 
             # ── aggregate gradient norm (restore for optimizer) ──
             opt.zero_grad(set_to_none=True)
-            loss = per_task_losses.sum()
+            loss = _wudi_objective(merging_vector)
             loss.backward()
             agg_grad_norm = merging_vector.grad.detach().float().norm(p=2).item()
 
@@ -185,7 +189,7 @@ class MergingMethod:
 
         # Few-step Adam refinement
         for step in range(1, iter_num + 1):
-            loss = _loss()
+            loss = _wudi_objective(merging_vector)
             opt.zero_grad(set_to_none=True)
             loss.backward()
             opt.step()
@@ -420,6 +424,7 @@ class MergingMethod:
         fallback: str = "task_arithmetic",  # "task_arithmetic" or "zero"
         fallback_scaling: float = 1.0,
         eps: float = 1e-12,
+        alpha: float = 0.0,
         warm_start: bool = True,
         cfs_ridge: float = 1e-5,
         loss_log_path: str = None,
@@ -463,6 +468,7 @@ class MergingMethod:
                     lr=lr,
                     weight_decay=weight_decay,
                     eps=eps,
+                    alpha=alpha,
                     warm_start=warm_start,
                     cfs_ridge=cfs_ridge,
                     loss_steps=loss_steps,
@@ -511,6 +517,7 @@ class MergingMethod:
         fallback: str = "task_arithmetic",  # "task_arithmetic" or "zero"
         fallback_scaling: float = 1.0,
         eps: float = 1e-12,
+        alpha: float = 0.0,
         warm_start: bool = True,
         cfs_ridge: float = 1e-5,
         loss_log_path: str = None,
@@ -570,6 +577,7 @@ class MergingMethod:
                     lr=lr,
                     weight_decay=weight_decay,
                     eps=eps,
+                    alpha=alpha,
                     warm_start=warm_start,
                     cfs_ridge=cfs_ridge,
                     loss_steps=loss_steps,
@@ -618,6 +626,7 @@ class MergingMethod:
         fallback: str = "task_arithmetic",  # "task_arithmetic" or "zero"
         fallback_scaling: float = 1.0,
         eps: float = 1e-12,
+        alpha: float = 0.0,
         warm_start: bool = True,
         cfs_ridge: float = 1e-5,
         loss_log_path: str = None,
@@ -721,6 +730,7 @@ class MergingMethod:
                     lr=lr,
                     weight_decay=weight_decay,
                     eps=eps,
+                    alpha=alpha,
                     warm_start=warm_start,
                     cfs_ridge=cfs_ridge,
                     loss_steps=loss_steps,
