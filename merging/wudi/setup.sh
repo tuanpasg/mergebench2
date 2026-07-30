@@ -54,10 +54,10 @@ python3 main.py \
 
 # NEW ADAM_WUDI
 python3 main.py \
- --out /workspace/outs/wudi_15 \
+ --out /workspace/outs/wudi_ta_10 \
  --merge_method wudi_merge \
- --wudi_iter 15 \
- --wudi_alpha 0.1 \
+ --wudi_iter 300 \
+ --wudi_alpha 10 \
  --wudi_weight_decay 0.0 \
  --wudi_device cuda \
  --exclude ".*embed.*" ".*lm_head.*"

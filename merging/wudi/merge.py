@@ -36,17 +36,20 @@ class MergingMethod:
         cfs_ridge: float = 1e-5,
         loss_steps: list = None,
     ):
+        loss_steps = [0, 1, 10, 50, 100, iter_num]
         metrics = []
         if cfs_ridge < 0:
             raise ValueError(f"cfs_ridge must be >= 0, got {cfs_ridge}")
         if alpha < 0:
             raise ValueError(f"alpha must be >= 0, got {alpha}")
 
-        # stack on device: (n_task, out, in)
+        # Stack on device in the checkpoint dtype, but optimize in float32.
+        # Adam updates at the default 1e-5 learning rate are commonly rounded
+        # away when the checkpoint (and therefore the parameter) is bfloat16.
         vectors = torch.stack([v.to(dev) for v in vecs_cpu], dim=0)
 
         orig_dtype = vectors.dtype
-        vectors_f = vectors
+        vectors_f = vectors.float()
 
         n_task, out_dim, in_dim = vectors_f.shape
 
@@ -59,10 +62,14 @@ class MergingMethod:
         weights = 1.0 / l2_norms  # (n_task,)
 
         cold_init = vectors_f.sum(dim=0)
-        anchor = cold_init.detach()
+        # `detach()` alone still aliases cold_init's storage. Parameter creation
+        # can preserve that alias when no dtype/device conversion is needed, so
+        # Adam would move the anchor together with the candidate and make the
+        # proximal penalty identically zero.
+        anchor = cold_init.detach().clone()
         lambda_layer = alpha * n_task / in_dim
 
-        def _wudi_objective(candidate: torch.Tensor) -> torch.Tensor:
+        def _wudi_objective_components(candidate: torch.Tensor):
             disturbing = candidate.unsqueeze(0) - vectors_f
 
             # inner: (n_task, out, out)
@@ -77,6 +84,10 @@ class MergingMethod:
             prox_loss = lambda_layer * torch.sum(
                 (candidate - anchor) ** 2
             )
+            return wudi_loss, prox_loss
+
+        def _wudi_objective(candidate: torch.Tensor) -> torch.Tensor:
+            wudi_loss, prox_loss = _wudi_objective_components(candidate)
             return wudi_loss + prox_loss
 
         init_delta = cold_init
@@ -113,11 +124,13 @@ class MergingMethod:
                 print("     [WARNING] WUDI warm_init neglected; falling back to cold_init (CFS solve failed)")
                 init_delta = cold_init
 
-            merging_vector = torch.nn.Parameter(init_delta.to(dtype=orig_dtype))
+            merging_vector = torch.nn.Parameter(init_delta.float().detach().clone())
             return merging_vector.detach().to(dtype=orig_dtype, device="cpu"), metrics
 
-        merging_vector = torch.nn.Parameter(init_delta.to(dtype=orig_dtype))
-
+        merging_vector = torch.nn.Parameter(init_delta.float().detach().clone())
+        assert anchor.data_ptr() != merging_vector.data_ptr(), (
+            "anchor and merging_vector unexpectedly share storage"
+        )
         opt = torch.optim.Adam(
             [merging_vector],
             lr=lr,
@@ -169,13 +182,27 @@ class MergingMethod:
 
             # ── aggregate gradient norm (restore for optimizer) ──
             opt.zero_grad(set_to_none=True)
-            loss = _wudi_objective(merging_vector)
+            wudi_loss, prox_loss = _wudi_objective_components(merging_vector)
+            loss = wudi_loss + prox_loss
             loss.backward()
             agg_grad_norm = merging_vector.grad.detach().float().norm(p=2).item()
+            anchor_distance_sq = torch.sum(
+                (merging_vector - anchor) ** 2
+            )
 
             metrics.append({
                 "step": step,
                 "loss": float(loss.detach().float().cpu().item()),
+                "wudi_loss": float(wudi_loss.detach().cpu().item()),
+                "prox_loss": float(prox_loss.detach().cpu().item()),
+                "anchor_distance_sq": float(
+                    anchor_distance_sq.detach().cpu().item()
+                ),
+                "anchor_distance": float(
+                    torch.sqrt(anchor_distance_sq).detach().cpu().item()
+                ),
+                "effective_prox_lambda": float(lambda_layer),
+                "alpha": float(alpha),
                 "gradient_norm": agg_grad_norm,
                 # ── new fields ──
                 "per_task_losses": per_task_losses.detach().float().cpu().tolist(),
@@ -448,7 +475,7 @@ class MergingMethod:
         if device == "cuda" and not torch.cuda.is_available():
             device = "cpu"
         dev = torch.device(device)
-        loss_steps = list(range(iter_num)) if loss_log_path else []
+        loss_steps = list(range(iter_num + 1)) if loss_log_path else []
         loss_log_rows = []
 
         for k in tqdm.tqdm(base_keys, desc="WUDI merge (per-key)"):
@@ -554,7 +581,7 @@ class MergingMethod:
         if device == "cuda" and not torch.cuda.is_available():
             device = "cpu"
         dev = torch.device(device)
-        loss_steps = list(range(iter_num)) if loss_log_path else []
+        loss_steps = list(range(iter_num + 1)) if loss_log_path else []
         loss_log_rows = []
 
         for k in tqdm.tqdm(base_keys, desc="Sparsed WUDI merge (per-key)"):
@@ -710,7 +737,7 @@ class MergingMethod:
         if device == "cuda" and not torch.cuda.is_available():
             device = "cpu"
         dev = torch.device(device)
-        loss_steps = list(range(iter_num)) if loss_log_path else []
+        loss_steps = list(range(iter_num + 1)) if loss_log_path else []
         loss_log_rows = []
 
         for k in tqdm.tqdm(base_keys, desc="WUDI merge (per-key)"):
